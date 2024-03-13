@@ -1,0 +1,569 @@
+        TITLE   "BALLON DEMO"
+            
+        KEY_MAP A8 =>S1
+        KEY_MAP A10=>S2
+        KEY_MAP A11=>S1
+
+; =========================================
+; スタートアップ部分
+; -----------------------------------------
+COLD:
+        NOP
+; システムレジスタ初期化
+        $0=>D, $0=>G, $0=>K, $0=>S, $0=>A11
+; 音停止
+        $1F=>L,H    ; K<$1F> => L<0>,H<$1F>
+        $01=>M
+        M=>FLS, $0=>L
+        M=>FRS, $1=>L
+; レジスタ初期化
+        $00=>A1
+        $00=>A2
+        $00=>A3
+        $00=>A4
+        H<=>X
+; メモリを0クリア
+        $1F=>L,H    ; K<$1F> => L<0>,H<$1F>
+MemoryClearLoop:
+        A=>MA
+    BOJ H-$01=>H
+        JP MemoryClearLoop
+; STB初期化(入力モード)
+        $1=>STB
+        $1=>STB
+        $1=>STB
+        $1=>STB
+; モードレジスタ初期化
+        A1=>MODE, $2=>L
+; NRMクリア
+        JS  NRM_CLEAR
+        JS  NRM_CLEAR
+; プログラム部分へジャンプ
+        $0=>D, $0=>G, $0=>K, $0=>S, $1=>A11
+
+; -----------------------------------------
+; NRMクリア
+; -----------------------------------------
+NRM_CLEAR:
+        $3F=>L,H                        ; K<$3F> => L<1>,H<$1F>
+; 4H BLK待ち
+NRM_Clear4HBLK_WaitLoop:
+    J   4H BLK
+        JP  NRM_Clear4HBLK_WaitLoop
+; 0x1FをNRMに書き込んでクリア
+NRM_Clear_Loop:
+        H=>NRM
+    CAJ M+$08=>M, $1=>L
+        JP  NRM_Clear_Loop
+        SRE
+
+; -----------------------------------------
+; スタートアップ部分 ここまで
+; =========================================
+
+; -----------------------------------------
+; スプライトをラインバッファ(NRM)へ登録する
+;
+; $00:0～$18:0のスプライト情報のY座標を元にNRMへ登録する。
+;
+; メモ）
+; ・Y座標とキャラクタROMの読み込み位置+1して登録している
+; ・Yリピートをする場合は、Y座標とキャラクタROMの読み込み位置を上手く調整する
+; -----------------------------------------
+EntrySprToNRM:
+        $3F=>L,H                    ; K<$3F> => L<1>,H<$1F>
+        $7F=>M
+        $19=>L,H                    ; K<$19> => L<0>,H<$19>
+        $00=>M
+; VBLK待ち
+LoopWaitVBLK_2:
+    J   VBLK
+        JP  LoopWaitVBLK_2
+; 画面表示
+        $1=>D, $0=>G, $0=>K, $0=>S, $0=>A11 ; $460 ; D<1> => D, G<0> => G, K<0> => K, S<0> => S, N<0> => A11
+; VBLK終了待ち
+LoopWaitVBLK_0:
+    J   VBLK
+        JP  SrchLoopZap1
+        JP  LoopWaitVBLK_0
+                                    ; ----------------------------------
+                                    ; 検索
+                                    ; ----------------------------------
+SrchLoop:
+        $19=>L,H                    ; K<$19> => L<0>,H<$19>
+    BOJ M-$76
+        SRE
+    CAJ M+$02=>M, $0=>L
+SrchLoopZap1:
+        M=>A1, $0=>L                ; A1は0,2,4...
+
+                                    ; ----------------------------------
+                                    ; A1と同じY座標のものを検索して処理
+                                    ; ----------------------------------
+        $18=>L,H                    ; K<$18> => L<0>,H<$18>
+SrchYLoop:                          ; A1:{ 0,2,4, ... ,0x7E }
+        $2A8                        ; EQJ/    M=A1, N<0> => L
+        JP  LineProcessY
+NextSprite:
+    BOJ H-$01=>H
+        JP  SrchYLoop
+                                    ; 1ラインの検索し終わった
+                                    ; ・4H BLKを待って、
+                                    ; ・表示期間中なら次のY座標を検索する
+                                    ; ・表示期が終わってしまったら終了する
+; 4H BLK待ち
+LoopWait4H_BLK_1:
+    J   4H BLK
+    JP  LoopWait4H_BLK_1
+; 表示期間中なら検索続ける
+    J   VBLK
+        JP  SrchLoop
+; 表示期が終わってしまったら終了する
+        $0=>D, $0=>G, $0=>K, $0=>S, $0=>A11
+        SRE
+
+                                    ; A1と同じY座標のものが見つかった
+LineProcessY:
+    CAJ M+$02=>M, $3=>L             ; ・Y座標を+1
+    CAJ M+$11=>M, $0=>L             ; ・読み込み位置のyを+1して、ySUBを1に
+        JP  RegisterSprite
+                                    ; ・読み込み位置のyが8回加算されたら（Y座標+8）されたら、Y座標を-8して位置を元に戻す
+                                    ; メモ）Yリピートの処理などをするならスプライトのパターン番号を調べてY座標を引かない等をする
+        $0=>L
+    BOJ M-$10=>M, $0=>L
+        JP  NextSprite
+        SRE
+
+; ラインバッファに登録
+RegisterSprite:
+        H=>NRM                      ; 登録されたスプライトが描画対象に
+        JP  NextSprite
+
+; -----------------------------------------
+; 全てのスプライトをX軸の昇順にソートする
+; work $1F:0, $1F:1, $1F:2
+; @todo 非常に重たい
+; -----------------------------------------
+EntrySpriteFullSort:
+        ; 続けるフラグを初期化
+        $5F=>L,H
+        $01=>M  ; 0:続ける 1:続けない
+
+        $1F=>L,H    ; $0=>L
+        $00=>M
+SpriteFullSortOuterLoop:
+
+        $3F=>L,H        ; K<$3F> => L<1>,H<$1F>
+        $18=>M
+SpriteFullSortInnerLoop:
+        M=>A1, $1=>L
+        A1=>H, $1=>L
+        MA=>A           ; A: sprite[j]  A2:sprite[j].x
+    BOJ H-$01=>H
+    BOJ M-A2, $1=>L     ; sprite[j-1].x < sprite[j].x
+        JP  SpriteFullSortSwap
+        JP  SpriteFullSortInnerContinue
+
+; SWAP sprite[j-1], sprite[j]
+;   A: sprite[j]
+;   H: j-1
+SpriteFullSortSwap:
+        MA<=>A
+    CAJ H+$01=>H
+        A=>MA
+
+        ; 続けるフラグ
+        $5F=>L,H
+        $00=>M      ; 0:続ける
+
+SpriteFullSortInnerContinue:
+        $1F=>L,H
+        M=>A1, $1=>L    ; i:A1
+    BOJ M-$01=>M, $1=>L ; j:M
+    EQJ/ M=A1, $1=>L
+        JP  SpriteFullSortInnerExit ; j==i
+    BOJ M-A1, $1=>L ; j < i
+        JP  SpriteFullSortInnerLoop ; j>i
+SpriteFullSortInnerExit:
+
+        ; 続けるフラグチェック 0:続ける
+        $5F=>L,H
+    BOJ M-$01
+        SRE
+        $01=>M
+
+SpriteFullSortOuterContinue:
+        $1F=>L,H
+    CAJ M+$01=>M, $0=>L
+    BOJ M-$18
+        SRE
+        JP  SpriteFullSortOuterLoop
+
+; -------------------------------------------------------------------------------
+; PAGE
+; -------------------------------------------------------------------------------
+        ORG $080
+
+; -----------------------------------------
+; スプライトの移動処理
+; ・スプライトパターンで移動方向がきまっている
+; ・方向返るときは、スプライトパターンを変える
+;
+; 1,2,3      1:左上に移動、2:上に移動、3:右上
+; 4   6      ...
+; 9 A B      B:右下に移動
+; -----------------------------------------
+EntrySprMove:
+        JS  EntrySprMoveY       ; Y軸方向の処理
+        JP  EntrySprMoveX       ; X軸方向の処理
+
+; -----------------------------------------
+; Y軸方向の処理
+; -----------------------------------------
+EntrySprMoveY:
+        $18=>L,H                ; K<$18> => L<0>,H<$18>
+LoopSprMoveY:
+        JS EntrySprMoveYOne
+    BOJ H-$01=>H                ; $481
+        JP  LoopSprMoveY
+        SRE
+
+; -----------------------------------------
+; X軸方向の処理
+; -----------------------------------------
+EntrySprMoveX:
+        $18=>L,H                ; K<$18> => L<0>,H<$18>
+LoopSprMoveX:
+        JS  EntrySprMoveXOne
+    BOJ H-$01=>H                ; $481
+        JP LoopSprMoveX
+        SRE
+
+; -----------------------------------------
+; スプライト１個のY軸方向の処理
+; -----------------------------------------
+EntrySprMoveYOne:
+        $2=>L
+    BOJ M-$01
+        JP  ZAP1
+PTN0:                           ; スプライトパターンが0
+PTN46:
+        SRE
+ZAP1:
+    BOJ M-$04
+        JP  ZAP2
+        JP  PTN123              ; 1,2,3
+ZAP2:
+    BOJ M-$07
+        JP  ZAP3
+        JP  PTN46               ; 4,  6     5は欠番で無い
+ZAP3:
+    BOJ M-$0C
+        SRE
+        JP  PTN9AB              ; 9,A,B     7,8は欠番で無い
+
+PTN123:                         ; 上へ移動
+        $0=>L
+    BOJ M-$02=>M, $0=>L
+                                ; 端っこ判定   Y < MIN_Y
+    BOJ M-$04                   ; BOJ  M-K<MIN_Y>
+        SRE
+                                ; 下に移動するようにする
+        $2=>L
+    CAJ M+$08=>M, $0=>L
+        SRE
+
+PTN9AB:                         ; 下へ移動
+        $0=>L
+    CAJ M+$02=>M, $0=>L
+                                ; 端っこ判定
+    BOJ M-$68                   ; BOJ  M-K<MAX_Y>
+        JP  CHANGE_UP_PTN
+        SRE
+CHANGE_UP_PTN:                  ; 上に移動するようにする
+        $2=>L
+    BOJ M-$08=>M, $0=>L
+        SRE
+
+; -----------------------------------------
+; スプライト１個のX軸方向の処理
+; -----------------------------------------
+EntrySprMoveXOne:               ; 3階層目
+        $2=>L
+    BOJ M-$01
+        JP  ZAP_X1
+        SRE
+ZAP_X1:
+    BOJ M-$02
+        JP  ZAP_X2
+        JP  PTN149              ; 1の処理
+ZAP_X2:
+    BOJ M-$03
+        JP  ZAP_X3
+        SRE                     ; 2の処理
+ZAP_X3:
+    BOJ M-$04
+        JP  ZAP_X4
+        JP  PTN36B              ; 3の処理
+ZAP_X4:
+    BOJ M-$05
+        JP  ZAP_X6
+        JP  PTN149              ; 4の処理
+ZAP_X6:
+    BOJ M-$07
+        JP  ZAP_X9
+        JP  PTN36B              ; 6の処理
+ZAP_X9:
+    BOJ  M-$0A
+        JP  ZAP_XA
+        JP  PTN149              ; 9の処理
+ZAP_XA:
+    BOJ M-$0B
+        JP   ZAP_XB
+        SRE                     ; 0xAの処理
+ZAP_XB:
+    BOJ M-$0C
+        SRE
+                                ;  Bの処理
+PTN36B:                         ; 右へ移動
+        $1=>L
+    CAJ M+$01=>M, $1=>L
+                                ; 端っこ判定
+    BOJ M-$50                   ; BOJ  M-K<MAX_X>
+        JP  CHANGE_LEFT_PTN
+        SRE
+CHANGE_LEFT_PTN:                ; 左に移動するようにする
+        $2=>L
+    BOJ M-$02=>M, $0=>L
+        SRE
+
+PTN149:                         ; 左へ移動
+        $1=>L
+    BOJ M-$01=>M, $1=>L
+                                ; 端っこ判定
+    BOJ M-$0A                   ; BOJ  M-K<MIN_X>
+        SRE
+                                ; 右に移動するようにする
+        $2=>L
+    CAJ M+$02=>M, $0=>L
+        SRE
+
+; -------------------------------------------------------------------------------
+; PAGE
+; -------------------------------------------------------------------------------
+        ORG $100
+
+; -----------------------------------------
+; スプライトの初期化 その１
+; メモ）1ページ（127バイト）内に収まらなかったので２回に分けている
+; -----------------------------------------
+EntryInitSpr:
+                        ; スプライト設定 #0
+        $00=>L,H
+        $08=>A1
+        $10=>A2
+        $01=>A3
+        $02=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #1
+        $20=>A1
+        $18=>A2
+        $02=>A3
+        $04=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #2
+        $18=>A1
+        $20=>A2
+        $03=>A3
+        $06=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #3
+        $40=>A1
+        $28=>A2
+        $04=>A3
+        $08=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #4
+        $50=>A1
+        $30=>A2
+        $0B=>A3
+        $0A=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #5
+        $60=>A1
+        $38=>A2
+        $09=>A3
+        $0C=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #6
+        $08=>A1
+        $40=>A2
+        $01=>A3
+        $0E=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #7
+        $18=>A1
+        $48=>A2
+        $03=>A3
+        $02=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #8
+        $28=>A1
+        $50=>A2
+        $04=>A3
+        $04=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #9
+        $38=>A1
+        $04=>A2
+        $09=>A3
+        $06=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #A
+        $40=>A1
+        $14=>A2
+        $0B=>A3
+        $08=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #B
+        $48=>A1
+        $24=>A2
+        $01=>A3
+        $0A=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #C
+        $5B=>A1
+        $34=>A2
+        $03=>A3
+        $0C=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #D
+        $67=>A1
+        $44=>A2
+        $04=>A3
+        $0E=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #E
+        $05=>A1
+        $12=>A2
+        $0B=>A3
+        $02=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #F
+        $55=>A1
+        $42=>A2
+        $02=>A3
+        $06=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #10
+        $65=>A1
+        $10=>A2
+        $09=>A3
+        $08=>A4
+        A=>MA
+        SRE
+
+; -------------------------------------------------------------------------------
+; PAGE
+; -------------------------------------------------------------------------------
+        ORG $180
+
+; -----------------------------------------
+; スプライトの初期化 その２
+; メモ）1ページ（127バイト）内に収まらなかったので
+; -----------------------------------------
+EntryInitSpr2:
+    CAJ H+$01=>H        ; #11
+        $1C=>A1
+        $10=>A2
+        $01=>A3
+        $08=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #12
+        $10=>A1
+        $10=>A2
+        $02=>A3
+        $0A=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #13
+        $15=>A1
+        $10=>A2
+        $03=>A3
+        $0C=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #14
+        $25=>A1
+        $10=>A2
+        $04=>A3
+        $0E=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #15
+        $35=>A1
+        $20=>A2
+        $06=>A3
+        $02=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #16
+        $65=>A1
+        $30=>A2
+        $09=>A3
+        $04=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #17
+        $55=>A1
+        $14=>A2
+        $09=>A3
+        $06=>A4
+        A=>MA
+    CAJ H+$01=>H        ; #18
+        $45=>A1
+        $18=>A2
+        $09=>A3
+        $08=>A4
+        A=>MA
+        SRE
+
+; -----------------------------------------
+; フレームをカウント
+; -----------------------------------------
+EntryTimer:
+        $1E=>L,H
+    CAJ M+$01=>M,$1=>L
+        SRE
+    CAJ M+$01=>M,$2=>L
+        SRE
+    CAJ M+$01=>M,$3=>L
+        SRE
+        SRE
+
+; -----------------------------------------
+; 一定間隔で背景色を変更する
+; -----------------------------------------
+EntryBGColorChange:
+                            ; フレームカウンタが0になったら処理
+        $1E=>L,H
+    BOJ M-$01
+        SRE
+
+        $1=>L
+        M=>A1, $0=>L        ; A1: 256分周の値
+        $0F=>A2
+        A1&A2=>A1, $0=>L
+        A1=>MODE, $2=>L     ; (256分周の値 & 0x0F) => MODE
+        SRE
+
+; =========================================
+; プログラムのエントリ
+; =========================================
+        ORG $46B
+PROG_ENTRY:
+        JS  EntryInitSpr
+        JS  EntryInitSpr2
+        JS  EntrySpriteFullSort
+MAIN_LOOP:
+        JS  EntryTimer
+        JS  EntrySprToNRM
+        JS  EntrySprMove
+        ;JS  EntrySpriteFullSort
+        JS  EntryBGColorChange
+        JP  MAIN_LOOP
