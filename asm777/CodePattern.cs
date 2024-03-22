@@ -10,7 +10,8 @@
         // 疑似命令
         ASM_ORG,                // ORG $000
         ASM_TITLE,              // TITLE "hogehoge"
-        ASM_KEY_MAP,            // KEY_MAP A08=>S1
+        ASM_KEY_MAP_A,          // KEY_MAP A08=>S1
+        ASM_KEY_MAP_B,          // KEY_MAP B09=>$00
         ASM_INDEX_A1,           // A1+$00,$0=>H,L
         ASM_INDEX_A2,           // A2+$00,$0=>H,L
         ASM_MEM_INDEX_A1_A1,    // M[A1+$00,$0]=>A1

@@ -72,13 +72,31 @@
                                 codeManager.title = paramString;
                             }
                             return;
-                        case CodePattern.ASM_KEY_MAP:
+                        case CodePattern.ASM_KEY_MAP_A:
                             {
                                 string paramString = token.groups[1].Value;
                                 int pin = Int32.Parse(paramString);
                                 paramString = token.groups[2].Value;
                                 int s = Int32.Parse(paramString, System.Globalization.NumberStyles.HexNumber);
-                                codeManager.keyMap[pin-8] = (byte)s;
+                                if(pin < 8 || pin > 12) {
+                                    throw new Exception("LineNo." + (lineNo + 1) + " out of range for pin number:" + token.tokenType);
+                                }
+                                codeManager.keyMapA[pin-8] = (byte)s;
+                            }
+                            return;
+                        case CodePattern.ASM_KEY_MAP_B:
+                            {
+                                string paramString = token.groups[1].Value;
+                                int pin = Int32.Parse(paramString);
+                                paramString = token.groups[2].Value;
+                                int s = Int32.Parse(paramString, System.Globalization.NumberStyles.HexNumber);
+                                if(s > 0x7F) {
+                                    throw new Exception("LineNo." + (lineNo + 1) + " out of range assignment value:" + token.tokenType);
+                                }
+                                if(pin < 9 || pin > 15) {
+                                    throw new Exception("LineNo." + (lineNo + 1) + " out of range for pin number:" + token.tokenType);
+                                }
+                                codeManager.keyMapB[pin-9] = (byte)s;
                             }
                             return;
                         case CodePattern.ASM_INDEX_A1:
@@ -273,7 +291,7 @@
         }
 
         private static void Help() {
-            Console.WriteLine("microAssembler777 Version 00.00.00");
+            Console.WriteLine("microAssembler777 Version 00.03.22");
             Console.WriteLine(System.AppDomain.CurrentDomain.FriendlyName + " <INPUT> <OUTPUT>");
         }
 

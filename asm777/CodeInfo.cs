@@ -441,10 +441,11 @@
             // ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
             // 疑似命令
             // ORG $000
-            new CodeInfo(@"^ORG\s+\$([a-fA-F0-9]{1,3})$",                                       "",     TokenType.ASM_ORG,          CodePattern.ASM_ORG,     0x000),
-            new CodeInfo("^TITLE\\s+\"(.*)\"$",                                                 "",     TokenType.ASM_TITLE,        CodePattern.ASM_TITLE,   0x000),
-            new CodeInfo("^TITLE\\s+'(.*)'$",                                                   "",     TokenType.ASM_TITLE,        CodePattern.ASM_TITLE,   0x000),
-            new CodeInfo(@"^KEY_MAP\s+A([0-9]{1,2})\s*=>\s*S([1-4])$",                          "",     TokenType.ASM_KEY_MAP,      CodePattern.ASM_KEY_MAP, 0x000),
+            new CodeInfo(@"^ORG\s+\$([a-fA-F0-9]{1,3})$",                                       "",     TokenType.ASM_ORG,          CodePattern.ASM_ORG,       0x000),
+            new CodeInfo("^TITLE\\s+\"(.*)\"$",                                                 "",     TokenType.ASM_TITLE,        CodePattern.ASM_TITLE,     0x000),
+            new CodeInfo("^TITLE\\s+'(.*)'$",                                                   "",     TokenType.ASM_TITLE,        CodePattern.ASM_TITLE,     0x000),
+            new CodeInfo(@"^KEY_MAP\s+A([0-9]{1,2})\s*=>\s*S([a-fA-F1-9])$",                    "",     TokenType.ASM_KEY_MAP_A,    CodePattern.ASM_KEY_MAP_A, 0x000),
+            new CodeInfo(@"^KEY_MAP\s+B([0-9]{1,2})\s*=>\s*\$([a-fA-F0-9]{1,2})$",              "",     TokenType.ASM_KEY_MAP_B,    CodePattern.ASM_KEY_MAP_B, 0x000),
 
             // 疑似命令 インデックスアクセスの準備
             // A1+offset,$L=>H,L            offset=>L,H : H+A1=>H, $L=>L

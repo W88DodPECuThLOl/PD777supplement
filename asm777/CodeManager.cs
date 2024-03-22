@@ -7,7 +7,8 @@ namespace asm777
 	internal class CodeManager
 	{
         public string title = "";
-        public byte[] keyMap = new Byte[] {0,0,0,0,0,0,0,0};
+        public byte[] keyMapA = new Byte[] {0,0,0,0,0,0,0,0};
+        public byte[] keyMapB = new Byte[] {0x40,0x20,0x10,0x08,0x04,0x02,0x01,0};
 
         class Bin {
             public int lineNo;
@@ -42,23 +43,37 @@ namespace asm777
             }
         }
 
-        void WriteFileHeader(BinaryWriter writer, string Title, byte[] KeyMap) {
+        void WriteFileHeaderVer0(BinaryWriter writer, string Title, byte[] KeyMapA, byte[] KeyMapB) {
             //書き込む処理
             var MagicNumber = new Byte[] {0x5F, 0x43, 0x61, 0x73, 0x73, 0x65, 0x74, 0x74, 0x65, 0x56, 0x69, 0x73, 0x69, 0x6F, 0x6E, 0x5F};
             var FormatVersion = new Byte[] {0x30, 0x30, 0x30, 0x30};
             writer.Write(MagicNumber);
             writer.Write(FormatVersion);
             writer.Write((Int32)0); // Padding1
-            writer.Write(KeyMap);
+            writer.Write(KeyMapA);
             byte[] TitleUTF8 = System.Text.Encoding.UTF8.GetBytes(Title);
             Array.Resize<byte>(ref TitleUTF8, 224);
+            writer.Write(TitleUTF8);
+        }
+
+        void WriteFileHeaderVer1(BinaryWriter writer, string Title, byte[] KeyMapA, byte[] KeyMapB) {
+            //書き込む処理
+            var MagicNumber = new Byte[] {0x5F, 0x43, 0x61, 0x73, 0x73, 0x65, 0x74, 0x74, 0x65, 0x56, 0x69, 0x73, 0x69, 0x6F, 0x6E, 0x5F};
+            var FormatVersion = new Byte[] {0x30, 0x30, 0x30, 0x31};
+            writer.Write(MagicNumber);
+            writer.Write(FormatVersion);
+            writer.Write((Int32)0); // Padding1
+            writer.Write(KeyMapA);
+            writer.Write(KeyMapB);
+            byte[] TitleUTF8 = System.Text.Encoding.UTF8.GetBytes(Title);
+            Array.Resize<byte>(ref TitleUTF8, 216);
             writer.Write(TitleUTF8);
         }
 
         public void WriteFile(string fileName) {
             using (var writer = new BinaryWriter(new FileStream(fileName, FileMode.Create), System.Text.Encoding.UTF8))
             {
-                WriteFileHeader(writer, title, keyMap);
+                WriteFileHeaderVer1(writer, title, keyMapA, keyMapB);
                 foreach (var e in program) {
                     //書き込む処理
                     writer.Write((Int16)e.pc);

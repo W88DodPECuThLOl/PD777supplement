@@ -187,7 +187,8 @@
 
         ASM_ORG,
         ASM_TITLE,
-        ASM_KEY_MAP,
+        ASM_KEY_MAP_A,
+        ASM_KEY_MAP_B,
         ASM_INDEX_A1,
         ASM_INDEX_A2,
         ASM_MEM_INDEX_A1_A1,
