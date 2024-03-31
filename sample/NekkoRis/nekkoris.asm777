@@ -1,0 +1,2671 @@
+        TITLE   "NEKKORIS"
+
+        ; K1  K2  K3  K4  K5  K6  K7
+        ; ----------------------------------------
+        ; STA L1L L1R SEL AUX 6   7    | [A08]
+        ; 1   L2L L2R 4   5   6   7    | [A09]
+        ; 1   2   3   4   5   P4  P3   | [A10]
+        ; 1   2   3   4   5   P2  P1   | [A11]
+        ; LL  L   C   R   RR  6   7    | [A12]
+        KEY_MAP A8 =>S1
+        KEY_MAP A9 =>S1
+        KEY_MAP A10=>S5         ; S1 +4 上下をP4P3に割り当て
+        KEY_MAP A11=>S2
+        ; START  :              S1 $01
+        ; Left   : レバー        S1 $02
+        ; Right  : レバー        S1 $04
+        ; SELECT : hold         S1 $08
+        ; PUSH4  : down         S1 $20
+        ; PUSH3  : hard drop    S1 $40
+        ; PUSH2  : 右回り        S2 $20
+        ; PUSH1  : 左回り        S2 $40
+
+; =========================================
+; スタートアップ部分
+; -----------------------------------------
+COLD:
+        NOP
+; システムレジスタ初期化
+        $0=>D, $0=>G, $0=>K, $0=>S, $0=>A11
+; 音停止
+        $1F=>L,H    ; K<$1F> => L<0>,H<$1F>
+        $01=>M
+        M=>FLS, $0=>L
+        M=>FRS, $1=>L
+; レジスタ初期化
+        $00=>A1
+        $00=>A2
+        $00=>A3
+        $00=>A4
+        H<=>X
+; メモリを0クリア
+        $1F=>L,H    ; K<$1F> => L<0>,H<$1F>
+MemoryClearLoop:
+        A=>MA
+    BOJ H-$01=>H
+        JP MemoryClearLoop
+; STB初期化(入力モード)
+        $1=>STB
+        $1=>STB
+        $1=>STB
+        $1=>STB
+; モードレジスタ初期化
+        A1=>MODE, $2=>L
+; NRMクリア
+        JS  EntryNRMClear
+        JS  EntryNRMClear
+; プログラム部分へジャンプ
+        $0=>D, $0=>G, $0=>K, $0=>S, $1=>A11
+
+; -----------------------------------------
+; NRMクリア
+; -----------------------------------------
+EntryNRMClear:
+        $3F=>L,H                        ; K<$3F> => L<1>,H<$1F>
+; 4H BLK待ち
+        JS Wait4H_BLK
+; 0x1FをNRMに書き込んでクリア
+NRMClearLoop:
+        H=>NRM
+    CAJ M+$08=>M, $1=>L
+        JP  NRMClearLoop
+        SRE
+
+; -----------------------------------------
+; スタートアップ部分 ここまで
+; =========================================
+
+; -----------------------------------------
+; 4H BLK待ち
+; -----------------------------------------
+Wait4H_BLK:
+    J   4H BLK
+        JP  Wait4H_BLK
+        SRE
+
+; -----------------------------------------
+; 4H BLK完了待ち
+; -----------------------------------------
+Wait4H_BLKEnd:
+    J   4H BLK
+        SRE
+        JP  Wait4H_BLKEnd
+
+; -----------------------------------------
+; A1%A2=>A1
+; -----------------------------------------
+A1ModA2Loop0:
+    BOJ A1-A2=>A1, $0=>L
+EntryA1ModA2:
+        IF(A1>=A2,$0=>L) JP A1ModA2Loop0
+        SRE
+
+; -----------------------------------------
+; スプライトをラインバッファ(NRM)へ登録する
+;
+; $00:0～$18:0のスプライト情報のY座標を元にNRMへ登録する。
+;
+; メモ）
+; ・Y座標とキャラクタROMの読み込み位置+1して登録している
+; ・Yリピートをする場合は、Y座標とキャラクタROMの読み込み位置を上手く調整する
+; -----------------------------------------
+EntrySprToNRM_Normal:
+        $3F=>L,H                    ; K<$3F> => L<1>,H<$1F>
+        $7F=>M
+        $19=>L,H                    ; K<$19> => L<0>,H<$19>
+        $00=>M
+; VBLK待ち
+NormalLoopWaitVBLK_2:
+    J   VBLK
+        JP  NormalLoopWaitVBLK_2
+; 画面表示
+        $1=>D, $0=>G, $0=>K, $0=>S, $0=>A11 ; $460 ; D<1> => D, G<0> => G, K<0> => K, S<0> => S, N<0> => A11
+; VBLK終了待ち
+NormalLoopWaitVBLK_0:
+    J   VBLK
+        JP  NormalSrchLoopZap1
+        JP  NormalLoopWaitVBLK_0
+                                    ; ----------------------------------
+                                    ; 検索
+                                    ; ----------------------------------
+NormalSrchLoop:
+        $19=>L,H                    ; K<$19> => L<0>,H<$19>
+    BOJ M-$76
+        SRE
+    CAJ M+$02=>M, $0=>L
+NormalSrchLoopZap1:
+        M=>A1, $0=>L                ; A1は0,2,4...
+
+                                    ; ----------------------------------
+                                    ; A1と同じY座標のものを検索して処理
+                                    ; ----------------------------------
+        $18=>L,H                    ; K<$18> => L<0>,H<$18>
+NormalSrchYLoop:                          ; A1:{ 0,2,4, ... ,0x7E }
+        $2A8                        ; EQJ/    M=A1, N<0> => L
+        JS  RegisterNormalSprite
+NormalNextSprite:
+    BOJ H-$01=>H
+        JP  NormalSrchYLoop
+                                    ; 1ラインの検索し終わった
+                                    ; ・4H BLKを待って、
+                                    ; ・表示期間中なら次のY座標を検索する
+                                    ; ・表示期が終わってしまったら終了する
+; 4H BLK待ち
+        JS Wait4H_BLK
+; 表示期間中なら検索続ける
+    J   VBLK
+        JP  NormalSrchLoop
+; 表示期が終わってしまったら終了する
+        $0=>D, $0=>G, $0=>K, $0=>S, $0=>A11
+        SRE
+
+; 見つかった
+; Hアドレス Lは0x0
+; ・Y座標(PRIO含む)を+2する
+; ・色の所を+0x11
+; ・Y座標(PRIO含む)を-0x10する
+RegisterNormalSprite:
+    CAJ M+$02=>M, $3=>L
+    CAJ M+$11=>M, $0=>L
+        JP RegisterNormalSpriteZap0
+    BOJ M-$10=>M, $0=>L
+        SRE
+RegisterNormalSpriteZap0:
+        H=>NRM
+        SRE
+
+; =========================================
+; @param    A2  { $40,$20,$10, ... ,$01 }
+EntryYBlock0:
+        ; 下準備と左の壁の処理
+        $10=>L,H
+        H<=>X
+        ; 左の壁の処理
+        $00=>L,H    ; L=0, H=0
+    CAJ M+$02=>M, $2=>L ; Y++
+        H=>NRM
+        H<=>X
+EntryYBlock0Loop0:
+        ; ブロック情報読み込み
+        $01=>A1
+        IF(M&A2, $0=>L) $03=>A1
+    CAJ H+$01=>H
+        IF(M&A2, $0=>L) CAJ A1+A1=>A1, $0=>L
+    CAJ H+$01=>H
+        ; スプライトに反映
+        H<=>X
+    CAJ H+$01=>H
+        A1=>M, $0=>L    ; パターン
+    CAJ M+$02=>M, $2=>L ; Y++
+        H=>NRM          ; NRMに登録
+        H<=>X
+EntryYBlock0Loop0Continue:
+        $1A=>A1
+        IF(H!=A1, $0=>L) JP EntryYBlock0Loop0
+EntryYBlock0Loop0Exit:
+        ; 右の壁の処理
+        H<=>X
+    CAJ H+$01=>H
+        $0=>L
+    CAJ M+$02=>M, $2=>L ; Y++
+        H=>NRM          ; NRMに登録
+        H<=>X
+        SRE
+
+; =========================================
+dir_pre:
+        $1B=>L,H    ;  1B:0 contmino.dir ; dir << 2 ２ビットシフトした値
+    CAJ M+$0C=>M, $0=>L
+        JP  dir_next_mod12
+
+; =========================================
+dir_next:
+        $1B=>L,H    ;  1B:0 contmino.dir ; dir << 2 ２ビットシフトした値
+    CAJ M+$04=>M, $0=>L
+dir_next_mod12:
+        $0C=>A1
+        M&A1=>M, $0=>L
+        SRE
+
+; =========================================
+; 座標にミノがあるかどうかを調べる
+;
+; @param    @WORK0 $1F:0 X座標(0～9)
+; @param    @WORK1 $1F:1 Y座標(0～20)
+; ミノがあるなら SRE
+; ミノがないなら SRE+1
+;
+EntryFieldCheck:
+        $1F=>L,H            ; @WORK0 $1F:0
+        IF(M>=$0A) SRE      ; X座標>=10
+        JS  EntryFieldSub
+        IF(M&A2, $0=>L) SRE
+        SRE+1
+
+; =========================================
+; 座標にブロックをセット
+;
+; @param    @WORK0 $1F:0 X座標(0～9)
+; @param    @WORK1 $1F:1 Y座標(0～20)
+;
+EntryFieldSet:
+        $1F=>L,H            ; @WORK0 $1F:0
+        IF(M>=$0A) SRE      ; X座標>=10
+        JS  EntryFieldSub
+        M|A2=>M, $0=>L
+        SRE
+
+value_11:
+        $03=>M
+        $1=>L
+        $02=>M
+        SRE
+
+; -------------------------------------------------------------------------------
+; PAGE
+; -------------------------------------------------------------------------------
+        ORG $080
+
+value_13:
+        $01=>M
+        $1=>L
+        $03=>M
+        SRE
+
+;
+; H,Lは$1Fを想定していて、X座標(0～9)が格納されていること
+; $1F:1は、$15未満(0～20)であること
+;
+EntryFieldSub:
+        M=>A1, $1=>L
+        $40=>A2
+        ; Y座標で分岐
+        ;IF(M>=$15) SRE  ; Y座標>=21
+        IF(M>=$0E) JP FieldSetY14_20
+        IF(M>=$07) JP FieldSetY7_13
+FieldSetY0_6: ; Y座標が0～6 L:0
+        IF(M>=$01) $20=>A2
+        IF(M>=$02) $10=>A2
+        IF(M>=$03) $08=>A2
+        IF(M>=$04) $04=>A2
+        IF(M>=$05) $02=>A2
+        IF(M>=$06) $01=>A2
+        A1+$10,$0=>H,L
+        SRE
+FieldSetY7_13: ; Y座標が7～13 L:1
+        IF(M>=$08) $20=>A2
+        IF(M>=$09) $10=>A2
+        IF(M>=$0A) $08=>A2
+        IF(M>=$0B) $04=>A2
+        IF(M>=$0C) $02=>A2
+        IF(M>=$0D) $01=>A2
+        A1+$10,$1=>H,L
+        SRE
+FieldSetY14_20: ; Y座標が14～20 L:2
+        IF(M>=$0F) $20=>A2
+        IF(M>=$10) $10=>A2
+        IF(M>=$11) $08=>A2
+        IF(M>=$12) $04=>A2
+        IF(M>=$13) $02=>A2
+        IF(M>=$14) $01=>A2
+        A1+$10,$2=>H,L
+        SRE
+
+; =========================================
+;
+; ミノの取得と生成
+; @return   A1 ミノ
+; @return   nextminos[2].kindにミノ入る
+minogen_generate:
+        ;
+        ; リングみたいにぐるぐる１個ずらす
+        ;
+        $3C=>L,H    ; $1C:1 minogen[0].kind;    temp = minogen[0].kind;
+        M=>A1, $2=>L
+        ;$5C=>L,H   ; $1C:2 minogen[1].kind;    minogen[0].kind = minogen[1].kind;
+        M=>A2, $1=>L
+        ;$3C=>L,H   ; $1C:1 minogen[0].kind;
+        A2=>M, $3=>L
+        ;$7C=>L,H   ; $1C:3 minogen[2].kind;    minogen[1].kind = minogen[2].kind;
+        M=>A2, $2=>L
+        ;$5C=>L,H   ; $1C:2 minogen[1].kind;
+        A2=>M, $0=>L
+        $1D=>L,H    ; $1D:0 minogen[3].kind;    minogen[2].kind = minogen[3].kind;
+        M=>A2, $3=>L
+        $7C=>L,H    ; $1C:3 minogen[2].kind;
+        A2=>M, $1=>L
+        $3D=>L,H    ; $1D:1 minogen[4].kind;    minogen[3].kind = minogen[4].kind;
+        M=>A2, $0=>L
+        ;$1D=>L,H   ; $1D:0 minogen[3].kind;
+        A2=>M, $2=>L
+        ;$5D=>L,H   ; $1D:2 minogen[5].kind;    minogen[4].kind = minogen[5].kind;
+        M=>A2, $1=>L
+        ;$3D=>L,H   ; $1D:1 minogen[4].kind;
+        A2=>M, $3=>L
+        ;$7D=>L,H   ; $1D:3 minogen[6].kind;    minogen[5].kind = minogen[6].kind;
+        M=>A2, $2=>L
+        ;$5D=>L,H   ; $1D:2 minogen[5].kind;
+        A2=>M, $3=>L
+        ;$7D=>L,H   ; $1D:3 minogen[6].kind;    minogen[6].kind = temp;
+        A1=>M, $3=>L
+        ;
+        ; 最初のをnextminos[2].kindに入れる
+        ;
+        $1C=>L,H    ; $1C:0 nextminos[2].kind;
+        A1=>M, $0=>L
+;;;;;;;        ;
+;;;;;;;        ; 7回に１回
+;;;;;;;        ;
+;;;;;;;        $4F=>L,H        ;   $0F:2   minogen.counter
+;;;;;;;    BOJ M-$01=>M, $2=>L
+;;;;;;;        SRE
+;;;;;;;        $06=>M
+;;;;;;;        ;
+;;;;;;;        ; シャッフルする
+;;;;;;;        ;
+;;;;;;;minogen_generate_shuffle:
+;;;;;;;        $1A=>L,H        ;   $1A:0   current_frames
+;;;;;;;        $02=>A2
+;;;;;;;        IF(M&A2, $0=>L) JP minogen_generate_swap46
+;;;;;;;minogen_generate_swap01:
+;;;;;;;        ; minogen[0] <=> minogen[1]
+;;;;;;;        $3C=>L,H   
+;;;;;;;        M=>A1, $2=>L  ; $1C:1 minogen[0].kind;
+;;;;;;;        M<=>A1, $1=>L ; $1C:2 minogen[1].kind;
+;;;;;;;        A1=>M, $1=>L  ; $1C:1 minogen[0].kind;
+;;;;;;;minogen_generate_swap46:
+;;;;;;;        $04=>A2
+;;;;;;;        IF(M&A2, $0=>L) SRE
+;;;;;;;        ; minogen[4] <=> minogen[6]
+;;;;;;;        $3D=>L,H   
+;;;;;;;        A1=>M, $3=>L  ; $1D:1 minogen[4].kind;
+;;;;;;;        M<=>A1, $1=>L ; $1D:3 minogen[6].kind;
+;;;;;;;        A1=>M, $1=>L  ; $1D:1 minogen[4].kind;
+        SRE
+
+pos_verify_sub1:
+        $1B=>L,H        ; $1B:0 dir << 2
+        M=>A2, $0=>L
+        $1F=>L,H
+        A2=>M, $0=>L
+        SRE
+
+value_1:
+        $01=>M
+value_x_0:
+        $1=>L
+        $00=>M
+        SRE
+value_4:
+        $00=>M
+value_x_1:
+        $1=>L
+        $01=>M
+        SRE
+
+sequences_1_3:                  ; +1,+3
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        CAJ M+$01=>M, $2=>L     ; contmino.pos[0]+=1
+        JP  sequences_x_3
+        JP  sequences_x_3
+sequences_2_0:                  ; +2,+0
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        CAJ M+$02=>M, $2=>L     ; contmino.pos[0]+=2
+        SRE
+        SRE
+sequences_3_M3:                 ; +3,-3
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        CAJ M+$03=>M, $2=>L     ; contmino.pos[0]+=3
+        JP  sequences_x_M3
+        JP  sequences_x_M3
+sequences_3_M1:                 ; +3,-1
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        CAJ M+$03=>M, $2=>L     ; contmino.pos[0]+=3
+        JP  sequences_x_M1
+        JP  sequences_x_M1
+sequences_3_2:                  ; +3,+2
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        CAJ M+$03=>M, $2=>L     ; contmino.pos[0]+=3
+        JP  sequences_x_2
+        JP  sequences_x_2
+sequences_3_3:                  ; +3,+3
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        CAJ M+$03=>M, $2=>L     ; contmino.pos[0]+=3
+        JP  sequences_x_3
+        JP  sequences_x_3
+sequences_3_0:                  ; +3,+0
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        CAJ M+$03=>M, $2=>L     ; contmino.pos[0]+=3
+        SRE
+        SRE
+
+; -------------------------------------------------------------------------------
+; PAGE
+; -------------------------------------------------------------------------------
+        ORG $100
+
+EntryYBlock1:
+        ; 下準備と左の壁の処理
+        $30=>L,H ; L=1
+        H<=>X
+        ; 左の壁の処理
+        $00=>L,H    ; L=0, H=0
+    CAJ M+$02=>M, $2=>L ; Y++
+        H=>NRM
+        H<=>X
+EntryYBlock1Loop0:
+        ; ブロック情報読み込み
+        $01=>A1
+        IF(M&A2, $1=>L) $03=>A1
+    CAJ H+$01=>H
+        IF(M&A2, $1=>L) CAJ A1+A1=>A1, $1=>L
+    CAJ H+$01=>H
+        ; スプライトに反映
+        H<=>X
+    CAJ H+$01=>H
+        A1=>M, $0=>L    ; パターン
+    CAJ M+$02=>M, $2=>L ; Y++
+        H=>NRM          ; NRMに登録
+        H<=>X
+EntryYBlock1Loop0Continue:
+        $1A=>A1
+        IF(H!=A1, $1=>L) JP EntryYBlock1Loop0
+EntryYBlock1Loop0Exit:
+        ; 右の壁の処理
+        JP EntryYBlock0Loop0Exit
+
+EntryYBlock2:
+        ; 下準備と左の壁の処理
+        $50=>L,H ; L=2
+        H<=>X
+        ; 左の壁の処理
+        $00=>L,H    ; L=0, H=0
+    CAJ M+$02=>M, $2=>L ; Y++
+        H=>NRM
+        H<=>X
+EntryYBlock2Loop0:
+        ; ブロック情報読み込み
+        $01=>A1
+        IF(M&A2, $2=>L) $03=>A1
+    CAJ H+$01=>H
+        IF(M&A2, $2=>L) CAJ A1+A1=>A1, $2=>L
+    CAJ H+$01=>H
+        ; スプライトに反映
+        H<=>X
+    CAJ H+$01=>H
+        A1=>M, $0=>L    ; パターン
+    CAJ M+$02=>M, $2=>L ; Y++
+        H=>NRM          ; NRMに登録
+        H<=>X
+EntryYBlock2Loop0Continue:
+        $1A=>A1
+        IF(H!=A1, $2=>L) JP EntryYBlock2Loop0
+EntryYBlock2Loop0Exit:
+        ; 右の壁の処理
+        JP EntryYBlock0Loop0Exit
+
+EntryGetBlockPosition0: ; ddii   dd:方向 ii:index
+        $1F=>L,H    ; @WORK0
+        IF(M>=$0F) JP value_13
+        IF(M>=$0E) JP value_9
+        IF(M>=$0D) JP value_5
+        IF(M>=$0C) JP value_1
+        IF(M>=$0B) JP value_11
+        IF(M>=$0A) JP value_10
+        IF(M>=$09) JP value_9
+        IF(M>=$08) JP value_8
+        IF(M>=$07) JP value_14
+        IF(M>=$06) JP value_10
+        IF(M>=$05) JP value_6
+        IF(M>=$04) JP value_2
+        IF(M>=$03) JP value_7
+        IF(M>=$02) JP value_6
+        IF(M>=$01) JP value_5
+        JP value_4
+EntryGetBlockPosition1:
+        $1F=>L,H    ; @WORK1
+        $03=>A1
+        M&A1=>M,$0=>L
+        IF(M>=$03) JP value_5
+        IF(M>=$02) JP value_4
+        IF(M>=$01) JP value_1
+        JP value_0
+EntryGetBlockPosition2:
+        $1F=>L,H    ; @WORK0
+        IF(M>=$0F) JP value_9
+        IF(M>=$0E) JP value_5
+        IF(M>=$0D) JP value_4
+        IF(M>=$0C) JP value_0
+        IF(M>=$0B) JP value_9
+        IF(M>=$0A) JP value_8
+        IF(M>=$09) JP value_6
+        IF(M>=$08) JP value_5
+        IF(M>=$07) JP value_10
+        IF(M>=$06) JP value_6
+        IF(M>=$05) JP value_5
+        IF(M>=$04) JP value_1
+        IF(M>=$03) JP value_5
+        IF(M>=$02) JP value_4
+        IF(M>=$01) JP value_2
+        JP value_1
+
+value_14:
+        $02=>M
+        $1=>L
+        $03=>M
+        SRE
+
+; -------------------------------------------------------------------------------
+; PAGE
+; -------------------------------------------------------------------------------
+        ORG $180
+
+sequences_1_M3:                 ; +1,-3
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        CAJ M+$01=>M, $2=>L     ; contmino.pos[0]+=1
+        JP  sequences_x_M3
+        JP  sequences_x_M3
+
+EntryGetBlockPosition3:
+        $1F=>L,H    ; @WORK0
+        IF(M>=$0F) JP value_8
+        IF(M>=$0E) JP value_5
+        IF(M>=$0D) JP value_4
+        IF(M>=$0C) JP value_1
+        IF(M>=$0B) JP value_10
+        IF(M>=$0A) JP value_9
+        IF(M>=$09) JP value_5
+        IF(M>=$08) JP value_4
+        IF(M>=$07) JP value_9
+        IF(M>=$06) JP value_6
+        IF(M>=$05) JP value_5
+        IF(M>=$04) JP value_2
+        IF(M>=$03) JP value_6
+        IF(M>=$02) JP value_5
+        IF(M>=$01) JP value_1
+        JP value_0
+
+EntryGetBlockPosition4:
+        $1F=>L,H    ; @WORK0
+        IF(M>=$0F) JP value_9
+        IF(M>=$0E) JP value_8
+        IF(M>=$0D) JP value_5
+        IF(M>=$0C) JP value_1
+        IF(M>=$0B) JP value_10
+        IF(M>=$0A) JP value_6
+        IF(M>=$09) JP value_5
+        IF(M>=$08) JP value_4
+        IF(M>=$07) JP value_9
+        IF(M>=$06) JP value_5
+        IF(M>=$05) JP value_2
+        IF(M>=$04) JP value_1
+        IF(M>=$03) JP value_6
+        IF(M>=$02) JP value_5
+        IF(M>=$01) JP value_4
+        ; JP value_0
+        ; @return A1 : ブロックの値(yy:xx)  yy:座標 xx:座標 
+value_0:
+        $00=>M
+        JP  value_x_0
+        ;$1=>L
+        ;$00=>M
+        ;SRE
+
+EntryGetBlockPosition5:
+        $1F=>L,H    ; @WORK0
+        IF(M>=$0F) JP value_9
+        IF(M>=$0E) JP value_5
+        IF(M>=$0D) JP value_1
+        IF(M>=$0C) JP value_0
+        IF(M>=$0B) JP value_8
+        IF(M>=$0A) JP value_6
+        IF(M>=$09) JP value_5
+        IF(M>=$08) JP value_4
+        IF(M>=$07) JP value_10
+        IF(M>=$06) JP value_9
+        IF(M>=$05) JP value_5
+        IF(M>=$04) JP value_1
+        IF(M>=$03) JP value_6
+        IF(M>=$02) JP value_5
+        IF(M>=$01) JP value_4
+        ;JP value_2
+value_2:
+        $02=>M
+        JP  value_x_0
+        ;$1=>L
+        ;$00=>M
+        ;SRE
+
+value_5:
+        $01=>M
+        JP  value_x_1
+        ;$1=>L
+        ;$01=>M
+        ;SRE
+
+value_7:
+        $03=>M
+        JP  value_x_1
+        ;$1=>L
+        ;$01=>M
+        ;SRE
+
+value_8:
+        $00=>M
+        $1=>L
+        $02=>M
+        SRE
+
+RegisterControlledMinoAndNext_Hold:
+        ; Next1   1
+        $09=>L,H
+        JS RegisterNormalSprite
+        ; Next2   1
+        $0A=>L,H
+        JS RegisterNormalSprite
+        ; HOLD   1
+        $0B=>L,H
+        JS RegisterNormalSprite
+RegisterControlledMino:
+        $1F=>L,H    ; WORK
+        M=>A1, $0=>L
+        CAJ M+$02=>M, $0=>L
+        $08=>L,H
+        EQJ/ M=A1, $0=>L
+        JS RegisterNormalSprite
+        $07=>L,H
+        EQJ/ M=A1, $0=>L
+        JS RegisterNormalSprite
+        JP  Wait4H_BLK
+
+; -------------------------------------------------------------------------------
+; PAGE
+; -------------------------------------------------------------------------------
+        ORG $200
+
+; =========================================
+; $1F:0  dd:ii     dd:方向 ii:インデックス
+; $1A:3 minokind  MinoKind  ミノの種類(1～7) 1:I 2:O 3:S 4:Z 5:J 6:L 7:T
+; @return $1F:0 : ブロックの値(x座標)
+; @return $1F:1 : ブロックの値(y座標)
+;
+; @WORK0 破壊される
+; @WORK1 破壊される
+EntryGetBlockPosition:
+        $7A=>L,H    ; $1A:3 minokind
+        IF(M>=$07) JP EntryGetBlockPosition6
+        IF(M>=$06) JP EntryGetBlockPosition5
+        IF(M>=$05) JP EntryGetBlockPosition4
+        IF(M>=$04) JP EntryGetBlockPosition3
+        IF(M>=$03) JP EntryGetBlockPosition2
+        IF(M>=$02) JP EntryGetBlockPosition1
+        IF(M>=$01) JP EntryGetBlockPosition0
+        $1F=>L,H
+        JP  value_0
+        ;$00=>M
+        ;$1=>L
+        ;$00=>M
+        ;SRE
+
+EntryGetBlockPosition6:
+        $1F=>L,H    ; @WORK0
+        IF(M>=$0F) JP value_9
+        IF(M>=$0E) JP value_5
+        IF(M>=$0D) JP value_4
+        IF(M>=$0C) JP value_1
+        IF(M>=$0B) JP value_9
+        IF(M>=$0A) JP value_6
+        IF(M>=$09) JP value_5
+        IF(M>=$08) JP value_4
+        IF(M>=$07) JP value_9
+        IF(M>=$06) JP value_6
+        IF(M>=$05) JP value_5
+        IF(M>=$04) JP value_1
+        IF(M>=$03) JP value_6
+        IF(M>=$02) JP value_5
+        IF(M>=$01) JP value_4
+        JP value_1
+
+; =========================================
+; @param    @WORK1 $1F:1 Y座標(0～20)
+; @return   １ライン揃ってる   SRE+1
+; @return   １ライン揃ってない SRE
+;
+;           @WORK0 破壊される
+;
+; bool
+; Field::checkLine(const s8 y) const
+; {
+;     for(s8 x = 0; x < WIDTH; ++x) {
+;         if(!getBlock(x, y).is_filled()) {
+;             return false;
+;         }
+;     }
+;     return true;
+; }
+checkLine:
+        $1F=>L,H
+        $09=>M
+checkLineLoop0:
+        JS  EntryFieldCheck
+        JP  checkLineZap0 ; ミノがある
+        SRE               ; ミノがない １ライン揃ってない
+checkLineZap0:
+        $1F=>L,H
+    BOJ M-$01=>M, $0=>L
+        JP  checkLineLoop0
+        SRE+1               ; １ライン揃ってる
+
+; =========================================
+EntryInitSpr:
+                        ; スプライト設定 #0 左の壁
+        $00=>L,H
+        $00=>A1
+        $20=>A2
+        $03=>A3
+        $0E=>A4
+        A=>MA
+                        ; スプライト設定 #1
+    CAJ H+$01=>H
+        $22=>A2
+        A=>MA
+                        ; スプライト設定 #2
+    CAJ H+$01=>H
+        $26=>A2
+        A=>MA
+                        ; スプライト設定 #3
+    CAJ H+$01=>H
+        $2A=>A2
+        A=>MA
+                        ; スプライト設定 #4
+    CAJ H+$01=>H
+        $2E=>A2
+        A=>MA
+                        ; スプライト設定 #5
+    CAJ H+$01=>H
+        $32=>A2
+        A=>MA
+                        ; スプライト設定 #6 右の壁
+    CAJ H+$01=>H
+        $36=>A2
+        $03=>A3
+        A=>MA
+
+        SRE
+
+; =========================================
+; Y=0の1ラインのブロックをリセットする
+; @WORK0 破壊される
+; @WORK1 破壊される
+; 
+resetLine0:
+        $3F=>L,H
+        $00=>M
+        $1F=>L,H
+        $09=>M
+resetLine0Loop0:
+        JS  EntryFieldReset
+        $1F=>L,H
+    BOJ M-$01=>M, $0=>L
+        JP  resetLine0Loop0
+        SRE
+
+; =========================================
+;    bool mino_down_with_score() {
+;        const bool res = contmino.move_mino(field, 1, 0);
+;        if(res) { score += 1; }
+;        return res;
+;    }
+; @todo 得点の加算
+mino_down_with_score:
+        ; @todo 得点の加算
+        $1F=>L,H
+        $00=>M
+        $3F=>L,H
+        $01=>M
+        JP  EntryMoveMino
+
+; =========================================
+;    // 固定と落下開始にワンクッション入れるために分離
+;    bool drop_start(const MinoKind kind) {
+;        contmino = ControlledMino(kind);
+;        current_frames = 0;
+;        return contmino.pos_verify(field);
+;    }
+; @param    A1  kind
+; @return 駄目だったら SRE
+; @return OKなら      SRE+1
+drop_start:
+        $3A=>L,H ; $1A:1 contmino.pos[0] = 4
+        $04=>M
+        $5A=>L,H  ; $1A:2 contmino.pos[1] = 0
+        $00=>M
+        $7A=>L,H  ; $1A:3 contmino.kind = A1;
+        A1=>M, $0=>L
+        $1B=>L,H  ; $1B:0 contmino.dir = 0 << 2;
+        $00=>M
+        ;
+        $1A=>L,H  ; $1A:0 current_frames
+        $00=>M
+        $0F=>L,H  ; current_frames_h $0F:0
+        $00=>M
+        $2F=>L,H  ; $0F:2 fall_block_counter
+        $00=>M
+        ;
+        JP  pos_verify
+
+; =========================================
+; 座標にブロックをリセット
+;
+; @param    @WORK0 $1F:0 X座標(0～9)
+; @param    @WORK1 $1F:1 Y座標(0～20)
+;
+EntryFieldReset:
+        $1F=>L,H            ; @WORK0 $1F:0
+        IF(M>=$0A) SRE      ; X座標>=10
+        JS  EntryFieldSub
+        $7F=>A1
+        H<=>X
+    BOJ A1-A2=>A1, $0=>L
+        H<=>X
+        M&A1=>M, $0=>L
+        SRE
+
+; -------------------------------------------------------------------------------
+; PAGE
+; -------------------------------------------------------------------------------
+        ORG $280
+
+; =========================================
+;    void fix_mino() {
+;        if(contmino.move_mino(field, 1, 0)) {
+;            contmino.move_mino(field, -1, 0);
+;            return; // まだ落下できるので固定しない
+;        }
+;
+;        // フィールドに固定
+;        field.putMino(contmino.getPosX(), contmino.getPosY(), contmino.getMinoKind(), contmino.getDir().get());
+;
+;        // レンダリング回避のためにダミーミノを挿入
+;        // バグの原因かもしれない...
+;        contmino = ControlledMino();
+;        gravity.fix_flag = false;
+;        lines_clear();
+;    }
+; @WORK3 破壊される
+EntryFixMino:
+        $1F=>L,H
+        $00=>M
+        $3F=>L,H
+        $01=>M
+        JS  EntryMoveMino
+        JP  EntryFixMino_MoveMinoFalse ; 移動できなかった
+        ; 移動できた
+        ; まだ落下できるので固定しない
+        $5A=>L,H            ; $1A:2 contmino.pos[1]
+    BOJ M-$01=>M, $0=>L
+        SRE
+EntryFixMino_MoveMinoFalse: ; 移動できなかった
+        ;---------------------------------------------------
+        ; フィールドに固定
+        $5F=>L,H        ; $1F:2     WORK2
+        $03=>M
+FixMino_Loop00:
+        ; WORK0 = (dir << 2) + WORK2
+        $1B=>L,H        ; $1B:0     dir << 2
+        M=>A1, $0=>L
+        $1F=>L,H        ; $1F:0     WORK0
+        A1=>M, $2=>L
+        M=>A1, $0=>L    ; $1F:2     WORK2
+    CAJ M+A1=>M, $0=>L
+        ; -----------------------
+
+        ; $1F:0  dd:ii     dd:方向 ii:インデックス
+        ; $1A:3 minokind  MinoKind  ミノの種類(1～7) 1:I 2:O 3:S 4:Z 5:J 6:L 7:T
+        ; @return $1F:0 : ブロックの値(x座標)
+        ; @return $1F:1 : ブロックの値(y座標)
+        JS EntryGetBlockPosition
+        ; pos反映
+        $3A=>L,H        ; $1A:1 contmino.pos[0]
+        M=>A1, $2=>L
+        M=>A2, $0=>L    ; $1A:2 contmino.pos[1]
+        $1F=>L,H
+    CAJ M+A1=>M, $1=>L  ; @WORK0 += A1 contmino.pos[0]
+        NOP
+    CAJ M+A2=>M, $0=>L  ; @WORK1 += A2 contmino.pos[1]
+        NOP
+        JS  EntryFieldSet
+
+        ; -----------------------
+        $5F=>L,H        ; $1F:2     WORK2
+    BOJ M-$01=>M, $0=>L
+        JP  FixMino_Loop00
+
+        ;------------------------------------------------
+        ; レンダリング回避のためにダミーミノを挿入
+        ; バグの原因かもしれない...
+        $3A=>L,H            ; $1A:1 contmino.pos[0] = 3
+        $03=>M
+        $5A=>L,H            ; $1A:2 contmino.pos[1] = 0
+        $00=>M
+        $7A=>L,H            ; $1A:3 contmino.kind = MinoKind:D;
+        $00=>M
+        $1B=>L,H            ; $1B:0 contmino.dir = 0 << 2;
+        $00=>M
+        ; gravity.fix_flag = false;
+        $7E=>A2             ; $7E(~1)
+        $7E=>L,H            ; $1E:3:$01     gravity.fix_flag 
+        M&A2=>M, $0=>L
+        ;
+        JP  lines_clear
+
+; =========================================
+;    void lines_clear() {
+;        s32 cls = 0;
+;        for(s32 y = 0; y < Field::HEIGHT; ++y) {
+;            if(field.checkLine(y)) {
+;                cls += 1;
+;                for(s32 x = 0; x < Field::WIDTH; ++x) {
+;                    field.setClearing(x, y, true);
+;                }
+;            }
+;        }
+;        score += SCORE_TABLE[(cls > 4) ? 4 : cls];
+;        clearlines += cls;
+;        if((cls > 0) && ((clearlines % LEVEL_UP_LINE_NUM) == 0)) {
+;            gravity.reciprocal = std::max(
+;                (u32)std::floor((f32)gravity.reciprocal * SPEEDUP_RATE),
+;                MAX_GRAVITY_RECIP
+;            );
+;        }
+;        dropping = DroppingState(EDroppingState::Interval, 0);
+;    }
+lines_clear:
+        ; @todo 消したライン数やレベルアップ等の処理
+
+        ; dropping = DroppingState(EDroppingState::Interval, 0);
+        $08=>A1
+        $7E=>L,H        ; $1E:3:$08     bool dropping.droppingState;    
+        M|A1=>M, $0=>L
+        $00=>M          ; $1E:0         dropping.Interval
+        SRE
+
+; =========================================
+; @param    @WORK0 $1F:0 X座標の移動量
+; @param    @WORK1 $1F:1 Y座標の移動量
+;
+;    /**
+;     * @return true 移動できた
+;     */
+;    bool move_mino(Field& field, const s8 dy, const s8 dx) {
+;        const auto pre = pos;
+;        setPosY(getPosY() + dy);
+;        setPosX(getPosX() + dx);
+;        if(!pos_verify(field)) {
+;            pos = pre;
+;            return false;
+;        }
+;        return true;
+;    }
+EntryMoveMino:
+        ; ワークに一時退避
+        $3A=>L,H
+        M=>A1, $2=>L    ; $1A:1 contmino.pos[0]
+        M=>A2, $0=>L    ; $1A:2 contmino.pos[1]
+        $5F=>L,H
+        A1=>M, $3=>L    ; @WORK2
+        A2=>M, $0=>L    ; @WORK3
+        ; 移動させて
+        M=>A1, $1=>L    ; @WORK0
+        M=>A2, $0=>L    ; @WORK1
+        $3A=>L,H
+        CAJ M+A1=>M, $2=>L  ; contmino.pos[0]+=@WORK0
+        NOP
+        CAJ M+A2=>M, $0=>L  ; contmino.pos[1]+=@WORK1
+        NOP
+        ; 判定する
+        JS  pos_verify
+        JP  MoveMinoFalse   ; 移動できなかった
+        SRE+1               ; 移動できた
+MoveMinoFalse:
+        ; 位置を元に戻す
+        $5F=>L,H
+        M=>A1, $3=>L    ; @WORK2
+        M=>A2, $1=>L    ; @WORK3
+        $3A=>L,H
+        A1=>M, $2=>L    ; $1A:1 contmino.pos[0]
+        A2=>M, $0=>L    ; $1A:2 contmino.pos[1]
+        SRE
+
+value_6:
+        $02=>M
+        JP  value_x_1
+        ;$1=>L
+        ;$01=>M
+        ;SRE
+value_9:
+        $01=>M
+value_x_2:
+        $1=>L
+        $02=>M
+        SRE
+value_10:
+        $02=>M
+        JP  value_x_2
+        ;$1=>L
+        ;$02=>M
+        ;SRE
+
+;-----------------------------------------------------
+;    bool ControlledMino::pos_verify(Field& field) {
+;        if(kind == MinoKind::D) {
+;            return false;
+;        }
+;
+;        const auto* blockPosition = Mino::getBlockPositions(kind, dir.get());
+;        for(int i = 0; i < 4; ++i) {
+;            int bx = blockPosition[i*2+0];
+;            int by = blockPosition[i*2+1];
+;            int x = bx + getPosX();
+;            int y = by + getPosY();
+;            // 設置可能チェック
+;            if(field.getBlock(x, y).is_filled()) { return false; }
+;        }
+;        return true;
+;    }
+; @WORK2,@WORK3使わない
+; @return 駄目だったら SRE
+; @return OKなら      SRE+1
+
+pos_verify:
+        $7A=>L,H        ; $1A:3 minokind
+        IF(M>=$01) JP pos_verify_zap0
+        SRE ; 無効なミノ
+
+sequences_M3_M2:                ; -3,-2
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        BOJ M-$03=>M, $2=>L     ; contmino.pos[0]-=3
+        NOP
+        BOJ M-$02=>M, $2=>L     ; contmino.pos[1]-=2
+        SRE
+        SRE
+sequences_M3_0:                 ; -3,+0
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        BOJ M-$03=>M, $2=>L     ; contmino.pos[0]-=3
+        SRE
+        SRE
+sequences_M3_1:                 ; -3,+1
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        BOJ M-$03=>M, $2=>L     ; contmino.pos[0]-=3
+        NOP
+        CAJ M+$01=>M, $2=>L     ; contmino.pos[1]+=1
+        SRE
+        SRE
+sequences_M3_3:                 ; -3,+3
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        BOJ M-$03=>M, $2=>L     ; contmino.pos[0]-=3
+        JP  sequences_x_3
+        JP  sequences_x_3
+sequences_M1_M3:                ; -1,-3
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        BOJ M-$01=>M, $2=>L     ; contmino.pos[0]-=1
+        NOP
+        JP  sequences_x_M3
+        JP  sequences_x_M3
+sequences_M1_3:                 ; -1,+3
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        BOJ M-$01=>M, $2=>L     ; contmino.pos[0]-=1
+        JP  sequences_x_3
+        JP  sequences_x_3
+sequences_0_M1:                 ; +0,-1
+        $5A=>L,H                ; $1A:2 contmino.pos[1]
+sequences_x_M1:
+        BOJ M-$01=>M, $2=>L     ; contmino.pos[0]-=1
+        SRE
+        SRE
+sequences_0_1:                  ; +0,+1
+        $5A=>L,H                ; $1A:2 contmino.pos[1]
+sequences_x_1:
+        CAJ M+$01=>M, $2=>L     ; contmino.pos[0]+=1
+        SRE
+        SRE
+sequences_0_3:                  ; +0,+3
+        $5A=>L,H                ; $1A:2 contmino.pos[1]
+sequences_x_3:
+        CAJ M+$03=>M, $2=>L     ; contmino.pos[0]+=3
+        SRE
+        SRE
+
+; -------------------------------------------------------------------------------
+; PAGE
+; -------------------------------------------------------------------------------
+        ORG $300
+
+pos_verify_zap0:
+        $2D=>L,H                ; $0D:1     @WORK5
+        $00=>M
+pos_verify_Loop00:
+        ; ---------------------------
+        ; @WORK0 = (dir << 2) | @WORK5;
+        M=>A1, $0=>L
+        $1F=>L,H
+        A1=>M, $0=>L
+        $1B=>L,H        ; $1B:0 dir << 2
+        M=>A1, $0=>L
+        $1F=>L,H
+        M|A1=>M, $0=>L
+
+        ; $1F:0  dd:ii     dd:方向 ii:インデックス
+        ; $1A:3 minokind  MinoKind  ミノの種類(1～7) 1:I 2:O 3:S 4:Z 5:J 6:L 7:T
+        ; @return $1F:0 : ブロックの値(x座標)
+        ; @return $1F:1 : ブロックの値(y座標)
+        JS  EntryGetBlockPosition
+        ; pos反映
+        $3A=>L,H        ; $1A:1 contmino.pos[0]
+        M=>A1, $2=>L
+        M=>A2, $0=>L    ; $1A:2 contmino.pos[1]
+        $3F=>L,H
+    CAJ M+A2=>M, $1=>L  ; @WORK1 += A2 contmino.pos[1]
+        NOP
+        IF(M>=$15) SRE  ; 範囲外なので駄目
+        $1F=>L,H
+    CAJ M+A1=>M, $0=>L  ; @WORK0 += A1 contmino.pos[0]
+        NOP
+        IF(M>=$0A) SRE  ; 範囲外なので駄目
+        JS  EntryFieldSub
+        IF(M&A2, $0=>L) SRE  ; ブロックがあるので駄目
+        ; 次のブロックを調べる
+
+        ; ---------------------------
+pos_verify_Loop00_next:
+        $2D=>L,H                ; $0D:1     @WORK5
+    CAJ M+$01=>M, $1=>L
+        IF(M>=$04) SRE+1        ; 大丈夫だった
+        JP  pos_verify_Loop00
+
+; =========================================
+;    void lines_close() {
+;        for(s32 i = 0; i < Field::HEIGHT; ++i) {
+;            if(field.checkLine(i)) {
+;                for(s32 j = i; j >= 1; --j) {
+;                    for(s32 k = 0; k < Field::WIDTH; ++k) {
+;                        field.setBlock(k, j, field.getBlock(k, j-1));
+;                    }
+;                }
+;                field.resetLine(0);
+;            }
+;        }
+;    }
+lines_close:
+        $5F=>L,H   ; @WORK2
+        $00=>M
+lines_close_Loop3:
+        ;$5F=>L,H   ; @WORK2を@WORK1
+        M=>A1, $1=>L
+        A1=>M, $1=>L
+
+        JS  checkLine
+        JP  lines_close_checkLine_false
+lines_close_checkLine_true:
+
+        ;-----------------------------------------------------
+        ; for(s32 j = i; j >= 1; --j) {
+        ;$5F=>L,H   ; @WORK2を@WORK1
+        ;M=>A1, $1=>L
+        ;A1=>M, $1=>L
+        $3F=>L,H
+        JP lines_close_Loop2_cond
+lines_close_Loop2:
+        ;----------------------------
+        ; for(s32 k = 0; k < Field::WIDTH; ++k) {
+        ;   field.setBlock(k, j, field.getBlock(k, j-1));
+        $1F=>L,H
+        $09=>M     ; @WORK0=9 X軸のカウンタ
+lines_close_Loop1:
+        $3F=>L,H   ; @WORK1
+    BOJ M-$01=>M, $1=>L
+        JS  EntryFieldCheck
+        JP  lines_close_set ; ミノがある
+                            ; ミノがない
+lines_close_reset:
+        $3F=>L,H   ; @WORK1
+    CAJ M+$01=>M, $1=>L
+        JS  EntryFieldReset
+        JP  lines_close_Loop1_continue
+lines_close_set:
+        $3F=>L,H   ; @WORK1
+    CAJ M+$01=>M, $1=>L
+        JS  EntryFieldSet
+lines_close_Loop1_continue:
+        $1F=>L,H
+    BOJ M-$01=>M, $0=>L
+        JP  lines_close_Loop1
+lines_close_Loop1_exit:
+        ; } // for(s32 k = 0; k < Field::WIDTH; ++k)
+        ;----------------------------
+
+        $3F=>L,H
+    BOJ M-$01=>M, $1=>L
+lines_close_Loop2_cond:
+        ;$3F=>L,H
+        IF(M>=$01) JP lines_close_Loop2
+lines_close_Loop2_exit:
+        ; } // for(s32 j = i; j >= 1; --j)
+        ;-----------------------------------------------------
+        JS  resetLine0
+
+lines_close_checkLine_false:
+lines_close_Loop3_continue:
+        $5F=>L,H   ; @WORK2
+        IF(M>=$14) SRE
+    CAJ M+$01=>M, $2=>L
+        JP  lines_close_Loop3
+
+sequences_0_2:                  ; +0,+2
+sequences_x_2:
+        $5A=>L,H                ; $1A:2 contmino.pos[1]
+        CAJ M+$02=>M, $2=>L     ; contmino.pos[1]+=2
+        SRE
+        SRE
+sequences_M3_M3:                ; -3, -3
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        BOJ M-$03=>M, $2=>L     ; contmino.pos[0]-=3
+        NOP
+sequences_x_M3:
+        BOJ M-$03=>M, $2=>L     ; contmino.pos[1]-=3
+        SRE
+        SRE
+
+; -------------------------------------------------------------
+;
+; 1A:3 1 MinoKind contmino.kind
+; 1B:0 1 u8       contmino.dir      dir << 2 ２ビットシフトした値
+; @WORK0
+; -------------------------------------------------------------
+next_sequences:
+        $7A=>L,H    ;  1A:3 1 MinoKind contmino.kind
+        IF(M>=$02) JP next_sequences_0
+; Iミノ
+        $1B=>L,H    ;  1B:0 1 u8       contmino.dir;     // dir << 2 ２ビットシフトした値
+        IF(M>=$0C) JP next_sequences_I_West
+        IF(M>=$08) JP next_sequences_I_South
+        IF(M>=$04) JP next_sequences_I_East
+; {-2, 0},  {1, 0},  {1,  2}, {-2, -1},
+; -2,+3,+0,-3
+; +0,+0,+2,-3
+;
+next_sequences_I_North:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_M3_M3
+        IF(M>=$02) JP sequences_2_0
+        IF(M>=$01) JP sequences_0_3
+sequences_M2_0:                 ; -2,+0
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        BOJ M-$02=>M, $2=>L     ; contmino.pos[0]-=2
+        SRE
+        SRE
+
+; {-2, 0},  {1, 0}, {-2,  1},  {1, -2},
+; -2,+3,-3,+3
+; +0,+0,+1,-3
+next_sequences_I_East:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_3_M3
+        IF(M>=$02) JP sequences_M3_1
+        IF(M>=$01) JP sequences_3_0
+        JP  sequences_M2_0
+
+; {-1, 0},  {2, 0}, {-1, -2},  {2,  1},
+; -1,+3,-3,+3
+; +0,+0,-2,+3
+next_sequences_I_South:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_3_3
+        IF(M>=$02) JP sequences_M3_M2
+        IF(M>=$01) JP sequences_3_0
+sequences_M1_0:
+        $3A=>L,H                ; $1A:2 contmino.pos[0]
+        BOJ M-$01=>M, $2=>L     ; contmino.pos[0]-=1
+        SRE
+        SRE
+
+; {2, 0}, {-1, 0},  {2, -1}, {-1,  2},
+; +2,-3,+3,-3
+; +0,+0,-1,+3
+next_sequences_I_West:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_M3_3
+        IF(M>=$02) JP sequences_3_M1
+        IF(M>=$01) JP sequences_M3_0
+        JP  sequences_2_0
+
+;-------------------------------------------------------------------------
+        ORG $380
+;-------------------------------------------------------------------------
+
+;
+; Iミノ以外
+;
+next_sequences_0:
+        $1B=>L,H    ;  1B:0 1 u8       contmino.dir;     // dir << 2 ２ビットシフトした値
+        IF(M>=$0C) JP next_sequences_West
+        IF(M>=$08) JP next_sequences_South
+        IF(M>=$04) JP next_sequences_East
+next_sequences_North:
+; {-1, 0}, {-1,  1}, {0, -2}, {-1, -2},}
+;
+; -1,+0,+1,-1
+; +0,+1,-3,+0
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_M1_0
+        IF(M>=$02) JP sequences_1_M3
+        IF(M>=$01) JP sequences_0_1
+        JP  sequences_M1_0
+
+;
+; {-1, 0}, {-1, -1}, {0,  2}, {-1,  2},
+; 
+; -1,+0,+1,-1
+; +0,-1,+3,+0
+next_sequences_East:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_M1_0
+        IF(M>=$02) JP sequences_1_3
+        IF(M>=$01) JP sequences_0_M1
+        JP  sequences_M1_0
+
+; {1, 0},  {1,  1}, {0, -2},  {1, -2},
+;
+; +1,+0,-1,+1
+; +0,+1,-3,+0
+next_sequences_South:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_1_0
+        IF(M>=$02) JP sequences_M1_M3
+        IF(M>=$01) JP sequences_0_1
+        JP  sequences_1_0
+
+; {1, 0},  {1, -1}, {0,  2},  {1,  2},
+;
+; +1,+0,-1,+1
+; +0,-1,+3,+0
+next_sequences_West:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_1_0
+        IF(M>=$02) JP sequences_M1_3
+        IF(M>=$01) JP sequences_0_M1
+        JP  sequences_1_0
+
+
+
+
+
+; -------------------------------------------------------------
+;
+; 1A:3 1 MinoKind contmino.kind
+; 1B:0 1 u8       contmino.dir      dir << 2 ２ビットシフトした値
+; @WORK0
+; -------------------------------------------------------------
+pre_sequences:
+        $7A=>L,H    ;  1A:3 1 MinoKind contmino.kind
+        IF(M>=$02) JP pre_sequences_0
+;
+; Iミノ
+;
+        $1B=>L,H    ;  1B:0 1 u8       contmino.dir;     // dir << 2 ２ビットシフトした値
+        IF(M>=$0C) JP pre_sequences_I_West
+        IF(M>=$08) JP pre_sequences_I_South
+        IF(M>=$04) JP pre_sequences_I_East
+; {2,  0}, {-1,  0},  {2, -1}, {-1,  2},
+; +2,-3,+3,-3
+; +0,+0,-1,+3
+pre_sequences_I_North:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_M3_3
+        IF(M>=$02) JP sequences_3_M1
+        IF(M>=$01) JP sequences_M3_0
+        JP  sequences_2_0
+; {1,  0}, {-2,  0}, {1,  2}, {-2, -1},
+; +1,-3,+3,-3
+; +0,+0,+2,-3
+pre_sequences_I_East:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_M3_M3
+        IF(M>=$02) JP sequences_3_2
+        IF(M>=$01) JP sequences_M3_0
+        JP  sequences_1_0
+; {1,  0}, {-2,  0}, {-2,  1}, {1, -2},
+; +1,-3,+0,+3
+; +0,+0,+1,-3
+pre_sequences_I_South:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_3_M3
+        IF(M>=$02) JP sequences_0_1
+        IF(M>=$01) JP sequences_M3_0
+        JP  sequences_1_0
+; {-1,  0},  {2,  0}, {-1, -2},  {2,  1},
+; -1,+3,-3,+3
+; +0,+0,-2,+3
+pre_sequences_I_West:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_3_3
+        IF(M>=$02) JP sequences_M3_M2
+        IF(M>=$01) JP sequences_3_0
+        JP  sequences_M1_0
+;
+; Iミノ以外
+;
+pre_sequences_0:
+        $1B=>L,H    ;  1B:0 1 u8       contmino.dir;     // dir << 2 ２ビットシフトした値
+        IF(M>=$0C) JP pre_sequences_West
+        IF(M>=$08) JP pre_sequences_South
+        IF(M>=$04) JP pre_sequences_East
+; {1, 0},  {1,  1}, {0, -2},  {1, -2},
+; +1,+0,-1,+1
+; +0,+1,-3,+0
+pre_sequences_North:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_1_0
+        IF(M>=$02) JP sequences_M1_M3
+        IF(M>=$01) JP sequences_0_1
+        JP  sequences_1_0
+; {-1, 0}, {-1, -1}, {0,  2}, {-1,  2},
+; -1,+0,+1,-1
+; +0,-1,+3,+0
+pre_sequences_East:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_M1_0
+        IF(M>=$02) JP sequences_1_3
+        IF(M>=$01) JP sequences_0_M1
+        JP  sequences_M1_0
+; {-1, 0}, {-1,  1}, {0, -2}, {-1, -2},
+; -1,+0,+1,-1
+; +0,+1,-3,+0
+pre_sequences_South:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_M1_0
+        IF(M>=$02) JP sequences_1_M3
+        IF(M>=$01) JP sequences_0_1
+        JP  sequences_M1_0
+; {1, 0},  {1, -1}, {0,  2},  {1,  2},
+; +1,+0,-1,+1
+; +0,-1,+3,+0
+pre_sequences_West:
+        $1F=>L,H    ;  @WORK0
+        IF(M>=$03) JP sequences_1_0
+        IF(M>=$02) JP sequences_M1_3
+        IF(M>=$01) JP sequences_0_M1
+        ;JP  sequences_1_0
+sequences_1_0:                  ; +1,+0
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        CAJ M+$01=>M, $2=>L     ; contmino.pos[0]+=1
+        SRE
+        SRE
+
+; -------------------------------------------------------------------------------
+; PAGE
+; -------------------------------------------------------------------------------
+        ORG $400
+
+; =========================================
+; プログラムのエントリ
+; =========================================
+
+; RAM
+; $0D:0 1 u8       @WORK4
+; $0D:1 1 u8       @WORK5
+; $0E:0 1 u8       edgeKey
+; $0E:1 1 u8       currentKey
+; $0E:2 1 u8       prevKey
+; $0E:3 1 u8       keyRepeat
+; $0F:0 1 u8       current_frames_H
+; $0F:1 1 u8       fall_block_counter
+; $0F:2 1 u8       minogen.counter
+;
+; $1A:0 1 u8       current_frames
+; $1A:1 1 s8       contmino.pos[0]
+; $1A:2 1 s8       contmino.pos[1]
+;  1A:3 1 MinoKind contmino.kind     ミノの種類(1～7) 1:I 2:O 3:S 4:Z 5:J 6:L 7:T
+;  1B:0 1 u8       contmino.dir;     // dir << 2 ２ビットシフトした値
+;  1B:1 1 MinoKind holdmino.kind     // Holdしているミノの種類
+;  1B:2 1 MinoKind nextminos[0].kind;
+;  1B:3 1 MinoKind nextminos[1].kind;
+;  1C 0 1 MinoKind nextminos[2].kind;
+;     1 1 MinoKind minogen[0].kind;
+;     2 1 MinoKind minogen[1].kind;
+;     3 1 MinoKind minogen[2].kind;
+;  1D 0 1 MinoKind minogen[3].kind;
+;     1 1 MinoKind minogen[4].kind;
+;     2 1 MinoKind minogen[5].kind;
+;     3 1 MinoKind minogen[6].kind;
+;
+; States
+;  1E:0 1 u8   dropping.Interval;
+;     1 1 u8   gravity.reciprocal
+;     2 1 u8   gravity.drop_limit
+;  1E:3 1 bool gravity.fix_flag;          $01
+;  1E:3   bool game_over;                 $02
+;  1E:3   bool holdflag                   $04
+;  1E:3   bool dropping.droppingState;    $08
+;
+; $1F:0 @WORK0
+; $1F:1 @WORK1
+; $1F:2 @WORK2
+; $1F:3 @WORK3
+;
+;       2 u16  clearlines;
+;       2 u16  score;
+;
+        ORG $46B
+PROG_ENTRY:
+; ================================================================================
+; タイトル画面
+; ================================================================================
+TITLE:
+        $1F=>L,H        ; @WORK0
+        $00=>M
+        $3F=>L,H        ; @WORK1
+        $00=>M
+;
+; タイトルのスプライト初期化
+;
+    ; 1行目
+        $20=>L,H    ; $1=>L
+        $20=>A1     ; Y座標*2
+        $1E=>A2
+        $29=>A3
+        $0E=>A4
+        A=>MA
+TitleSpriteInitLoop0:
+        MA=>A
+    CAJ H+$01=>H
+        A=>MA
+    CAJ M+$07=>M, $2=>L
+    CAJ M+$01=>M, $1=>L
+        IF(M>=$3A) JP TitleSpriteInitZap0
+        JP TitleSpriteInitLoop0
+TitleSpriteInitZap0:
+    ; ２行目
+    CAJ H+$01=>H
+        $2E=>A1     ; Y座標*2
+        $1E=>A2
+        $31=>A3
+        A=>MA
+TitleSpriteInitLoop1:
+        MA=>A
+    CAJ H+$01=>H
+        A=>MA
+    CAJ M+$07=>M, $2=>L
+    CAJ M+$01=>M, $1=>L
+        IF(M>=$3A) JP TitleSpriteInitZap1
+        JP TitleSpriteInitLoop1
+TitleSpriteInitZap1:
+    ; 3行目
+    CAJ H+$01=>H
+        $3C=>A1     ; Y座標*2
+        $1E=>A2
+        $39=>A3
+        A=>MA
+TitleSpriteInitLoop2:
+        MA=>A
+    CAJ H+$01=>H
+        A=>MA
+    CAJ M+$07=>M, $2=>L
+    CAJ M+$01=>M, $1=>L
+        IF(M>=$3A) JP TitleSpriteInitZap2
+        JP TitleSpriteInitLoop2
+TitleSpriteInitZap2:
+    ; 4行目
+    CAJ H+$01=>H
+        $4A=>A1     ; Y座標*2
+        $1E=>A2
+        $41=>A3
+        A=>MA
+TitleSpriteInitLoop3:
+        MA=>A
+    CAJ H+$01=>H
+        A=>MA
+    CAJ M+$07=>M, $2=>L
+    CAJ M+$01=>M, $1=>L
+        IF(M>=$3A) JP TitleSpriteInitZap3
+        JP TitleSpriteInitLoop3
+TitleSpriteInitZap3:
+;
+; タイトル画面ループ
+;
+TitleLoop:
+        ; スプライトをラインバッファへ
+        JS EntrySprToNRM_Normal
+        ; キー入力
+        ; @WORK0 現在の入力
+        ; @WORK1 1個前の入力
+        $1F=>L,H        ; @WORK0
+        M=>A1, $1=>L
+        A1=>M, $0=>L    ; @WORK1
+        $1=>STB
+        $0=>STB
+        $0=>D, $0=>G, $1=>K, $0=>S, $1=>A11
+        $00=>M ; S1から入力
+        $0=>D, $0=>G, $0=>K, $0=>S, $1=>A11
+        $09=>A1
+        M&A1=>M, $1=>L
+        ; START、SELECTが離されたらタイトル終了
+        IF(M>=$08) JP TitleZap0 ; １個前がON
+        JP TitleLoop
+TitleZap0:
+        $0=>L
+        IF(M>=$08) JP TitleLoop ; 今もON
+;
+; タイトル画面の終了処理
+;
+        $1=>STB
+        $1=>STB
+        ; メモリクリア
+        $00=>A1
+        $00=>A2
+        $00=>A3
+        $00=>A4
+        $1F=>L,H    ; K<$1F> => L<0>,H<$1F>
+TitleMemClearLoop:
+        A=>MA
+    BOJ H-$01=>H
+        JP TitleMemClearLoop
+        ; ゲームへ
+
+; ================================================================================
+; ゲームの初期化
+; ================================================================================
+        $0E=>L,H        ; $0E:0 edgeKey
+        $00=>M
+        $2E=>L,H        ; $0E:1 currentKey
+        $00=>M
+        $4E=>L,H        ; $0E:2 prevKey
+        $00=>M
+        $1A=>L,H        ; $1A:0 current_frames
+        $00=>M
+        $0F=>L,H        ; current_frames_h $0F:0
+        $00=>M
+        $2F=>L,H        ; fall_block_counter $0F:2
+        $00=>M
+        $3A=>L,H        ; $1A:1 contmino.pos[0]
+        $03=>M
+        $5A=>L,H        ; $1A:2 contmino.pos[1]
+        $00=>M
+        $7A=>L,H        ; $1A:3 contmino.kind
+        $00=>M
+;-------------------------------------------------------------------------
+        JP PAGE_BREAK480
+        ORG $480
+PAGE_BREAK480: ;----------------------------------------------------------
+        $1B=>L,H        ; $1B:0 contmino.dir;     // dir << 2 ２ビットシフトした値
+        $00=>M
+        $3B=>L,H        ; $1B:1 holdmino.kind     // Holdしているミノの種類
+        $00=>M
+        ;
+        $1E=>L,H        ; $1E:0 dropping.Interval
+        $00=>M
+        $3E=>L,H        ; $1E:1 gravity.reciprocal
+        $2D=>M          ; 45
+        $5E=>L,H        ; $1E:2 gravity.drop_limit
+        $00=>M          ; 
+        $7E=>L,H        ; $1E:3
+        $00=>M
+                        ; States
+                        ;  1E:3   bool gravity.fix_flag;          $01
+                        ;  1E:3   bool game_over;                 $02
+                        ;  1E:3   bool holdflag                   $04
+                        ;  1E:3   bool dropping.droppingState;    $08
+;
+; ミノ生成の初期化
+;
+        $4F=>L,H        ; $0F:2 minogen.counter
+        $06=>M
+        $3C=>L,H        ; $1C:1 minogen[0].kind;
+        $01=>M
+        $5C=>L,H        ; $1C:2 minogen[1].kind;
+        $02=>M
+        $7C=>L,H        ; $1C:3 minogen[2].kind;
+        $03=>M
+        $1D=>L,H        ; $1D:0 minogen[3].kind;
+        $04=>M
+        $3D=>L,H        ; $1D:1 minogen[4].kind;
+        $05=>M
+        $5D=>L,H        ; $1D:2 minogen[5].kind;
+        $06=>M
+        $7D=>L,H        ; $1D:3 minogen[6].kind;
+        $07=>M
+
+;
+; 操作中のミノ、Next0、Next1、Next2を設定
+;
+        ; 操作中のミノを設定
+        JS  minogen_generate
+        $7A=>L,H        ; $1A:3 contmino.kind
+        A1=>M, $0=>L
+        ; NEXT0を設定
+        JS  minogen_generate
+        $5B=>L,H        ; $1B:2 nextminos[0].kind;
+        A1=>M, $0=>L
+        ; NEXT1を設定
+        JS  minogen_generate
+        $7B=>L,H        ; $1B:3 nextminos[1].kind;
+        A1=>M, $0=>L
+        ; NEXT2を設定
+        JS  minogen_generate
+;
+; 操作中のミノ、Next0、Next1、Next2のスプライトの下準備
+;
+        ; スプライト設定 #7 シャドウミノ
+        $07=>L,H
+        $02=>A4     ; Color,etc.
+        A=>MA
+        ; スプライト設定 #8 操作中のミノ
+        ;$08=>L,H
+        ;$04=>A4     ; Color,etc.
+        ;A=>MA
+        ; Next1
+        $09=>L,H
+        $02=>A1     ; Y
+        $3A=>A2     ; X
+        ;$08=>A3    ; PTN
+        $0E=>A4     ; Color,etc.
+        A=>MA
+        ; Next2
+        $0A=>L,H
+        ;$02=>A1
+        $44=>A2
+        ;$08=>A3
+        ;$0E=>A4
+        A=>MA
+        ; Hold
+        $0B=>L,H
+        ;$02=>A1
+        $16=>A2
+        ;$08=>A3
+        ;$0E=>A4
+        A=>MA
+;
+; ゲーム開始
+;
+        JP  MAIN_LOOP
+
+; ================================================================================
+; ゲームオーバー
+; ================================================================================
+GAME_OVER:
+;
+; GAME OVERのスプライト設定
+;
+        $07=>L,H
+        $04=>A1 ; Y
+        $1C=>A2 ; X
+        $49=>A3 ; PTN
+        $08=>A4 ; Color,etc.
+        A=>MA
+    CAJ H+$01=>H
+        $23=>A2 ; X
+        $4A=>A3 ; PTN
+        A=>MA
+    CAJ H+$01=>H
+        $02=>A1 ; Y @todo なぜかずれるので
+        $2A=>A2 ; X
+        $4B=>A3 ; PTN
+        A=>MA
+    CAJ H+$01=>H
+        $31=>A2 ; X
+        $4C=>A3
+        A=>MA
+    CAJ H+$01=>H
+        $38=>A2 ; X
+        $4D=>A3
+        A=>MA
+;
+; SELECTが離されたらタイトルへ遷移する
+;
+        JS  EntryInitSpr
+        ; キー入力判定
+        $08=>A1     ; hold
+        $4E=>L,H    ; $0E:2 1 u8       prevKey
+        IF(M&A1==0, $1=>L) JP JumpEntrySprToNRM_Without_SetHoldNextMino
+        IF(M&A1==0, $1=>L) JP TITLE   ; タイトル画面へ遷移
+        JP JumpEntrySprToNRM_Without_SetHoldNextMino
+
+; ================================================================================
+; メインループ
+; ================================================================================
+MAIN_LOOP:
+        JS  EntryInitSpr
+; -----------------------------------------
+;　ワークの状態をスプライトへ設定
+; -----------------------------------------
+JumpEntrySprToNRM:
+        ; Next1
+        $5B=>L,H        ; 1B:2 1 MinoKind nextminos[0].kind;
+        M=>A1, $1=>L    ; contmino.kind 0～7
+        $49=>L,H
+        A1=>M, $2=>L
+    CAJ M+$07=>M, $2=>L ; パターン番号 7～$E
+        ; Next2
+        $7B=>L,H        ; 1B:3 1 MinoKind nextminos[1].kind;
+        M=>A1, $1=>L    ; contmino.kind 0～7
+        $4A=>L,H
+        A1=>M, $2=>L
+    CAJ M+$07=>M, $2=>L ; パターン番号 7～$E
+        ; Hold
+        $3B=>L,H        ; 1B:1 1 MinoKind holdmino.kind
+        M=>A1, $1=>L    ; contmino.kind 0～7
+        $4B=>L,H
+        A1=>M, $2=>L
+    CAJ M+$07=>M, $2=>L ; パターン番号 7～$E
+        ; スプライト設定 #7 シャドウミノ
+        $5A=>L,H        ; $1A:2 contmino.pos[1]
+        M=>A1, $0=>L
+        $08=>L,H
+        A1=>M, $0=>L
+JumpEntrySprToNRM_loop00:
+        $1F=>L,H
+        $00=>M
+        $3F=>L,H
+        $01=>M
+        JS  EntryMoveMino
+        JP  JumpEntrySprToNRM_loop00_break; 移動できなかった
+        JP  JumpEntrySprToNRM_loop00; 移動できた
+JumpEntrySprToNRM_loop00_break:
+        ; Y軸
+        $5A=>L,H        ; $1A:2 contmino.pos[1]
+        M=>A1, $0=>L
+    CAJ A1+A1=>A1, $0=>L
+        NOP
+    CAJ A1+A1=>A1, $0=>L
+        NOP
+        $07=>L,H
+        A1=>M, $0=>L
+    CAJ M+$11=>M, $2=>L
+        NOP
+        ; X軸
+        $3A=>L,H        ; $1A:1 contmino.pos[0]
+        M=>A1, $1=>L
+    CAJ A1+A1=>A1, $1=>L
+        NOP
+;-------------------------------------------------------------------------
+        JP PAGE_BREAK500
+        ORG $500
+PAGE_BREAK500: ;----------------------------------------------------------
+        $27=>L,H
+        A1=>M, $1=>L
+    CAJ M+$12=>M, $1=>L
+        NOP
+    CAJ M+$10=>M, $2=>L
+        ; contmino.kind
+        $7A=>L,H
+        M=>A1, $1=>L    ; contmino.kind 0～7
+        $47=>L,H
+        A1=>M, $2=>L
+    CAJ M+$07=>M, $2=>L ; パターン番号 7～$E
+        $1B=>L,H
+        M=>A1, $2=>L
+    CAJ A1+A1=>A1, $2=>L ; += contmino.dir * 2
+        $47=>L,H
+    CAJ M+A1=>M, $3=>L
+        ; 色
+        ;$3=>L
+        $00=>M
+
+        ; 戻しておく
+        $08=>L,H
+        M=>A1, $0=>L
+        $5A=>L,H
+        A1=>M, $0=>L
+
+        ; スプライト設定 #8 操作中のミノ
+        $07=>L,H ; #7からコピー
+        MA=>A
+        $08=>L,H
+        A=>MA
+
+        ; Y軸
+        $5A=>L,H
+        M=>A1, $0=>L
+    CAJ A1+A1=>A1, $0=>L
+        NOP
+    CAJ A1+A1=>A1, $0=>L
+        NOP
+        $08=>L,H
+        A1=>M, $0=>L
+    CAJ M+$11=>M, $3=>L
+        NOP
+        ; 色
+        ; 1:I 2:O 3:S 4:Z 5:J 6:L 7:T
+        $7A=>L,H        ; $1A:3 minokind  MinoKind
+        JP  GetMinoColor
+ReturnGetMinoColor:
+        $68=>L,H
+        A1=>M, $0=>L
+
+; -----------------------------------------
+;　スプライトをラインバッファへ
+; -----------------------------------------
+JumpEntrySprToNRM_Without_SetHoldNextMino:
+
+; VBLK待ち
+LoopWaitVBLK:
+    J   VBLK
+        JP  LoopWaitVBLK
+; 画面表示
+        $1=>D, $0=>G, $0=>K, $0=>S, $1=>A11 ; $460 ; D<1> => D, G<0> => G, K<0> => K, S<0> => S, N<1> => A11
+; VBLK終了待ち
+LoopWaitVBLKEnd:
+    J   VBLK
+        JP  SrchLoop
+        JP  LoopWaitVBLKEnd
+;
+SrchLoop:
+        JS  Wait4H_BLKEnd
+
+        ; 描画Y: 0
+        $1F=>L,H    ; WORK
+        $00=>M
+        JS  RegisterControlledMino
+        JS  Wait4H_BLKEnd
+        ; 描画Y: 1
+        JS  RegisterControlledMino
+        JS  Wait4H_BLKEnd
+        ; 描画Y: 2
+        JS  RegisterControlledMinoAndNext_Hold
+        JS  Wait4H_BLKEnd
+        ; 描画Y: 3
+        JS  RegisterControlledMinoAndNext_Hold
+        JS  Wait4H_BLKEnd
+        ; 描画Y: 4
+        JS  RegisterControlledMinoAndNext_Hold
+        JS  Wait4H_BLKEnd
+        ; 描画Y: 5
+        JS  RegisterControlledMinoAndNext_Hold
+        JS  Wait4H_BLKEnd
+        ; 描画Y: 6
+        JS  RegisterControlledMino
+        JS  Wait4H_BLKEnd
+        ; 描画Y: 7
+        JS  RegisterControlledMino
+        JS  Wait4H_BLKEnd
+        ; 描画Y: 8～
+        $40=>A2 ; 表示するかしないか取得のマスク
+YBlock0Loop:
+        JS  EntryYBlock0
+        JS  RegisterControlledMino
+        JS  EntryYBlock0
+        JS  RegisterControlledMino
+        A2=>RS, $0=>L       ; A2 >>= 1;
+    EQJ A2&A2, $0=>L        ; if (A2!=0) goto YBlock0Loop;
+        JP  YBlock0Loop
+
+        $40=>A2
+YBlock1Loop:
+        JS  EntryYBlock1
+        JS  RegisterControlledMino
+        JS  EntryYBlock1
+        JS  RegisterControlledMino
+        A2=>RS, $0=>L       ; A2 >>= 1;
+    EQJ A2&A2, $0=>L        ; if (A2!=0) goto YBlock1Loop;
+        JP  YBlock1Loop
+
+        $40=>A2
+YBlock2Loop:
+        JS  EntryYBlock2
+        JS  RegisterControlledMino
+        JS  EntryYBlock2
+        JS  RegisterControlledMino
+        A2=>RS, $0=>L       ; A2 >>= 1;
+    EQJ A2&A2, $0=>L        ; if (A2!=0) goto YBlock2Loop;
+        JP  YBlock2Loop
+
+    ; 底のブロック #7
+    ; Xリピートで
+        $07=>L,H
+        $64=>A1
+        $14=>A2
+        $70=>A3 ; 69
+        $0E=>A4
+        A=>MA
+        H=>NRM
+        $66=>A1
+        JS  Wait4H_BLKEnd
+        JS  Wait4H_BLK
+        A=>MA
+        H=>NRM
+        JS  Wait4H_BLKEnd
+; -----------------------------------------
+; キー入力更新
+; -----------------------------------------
+;        keys[0] : A button     $01
+;        keys[1] : B button     $10
+;        keys[2] : hard drop    $40
+;        keys[3] : down         $20
+;        keys[4] : right        $04
+;        keys[5] : left         $02
+;        keys[6] : hold         $08
+;
+        ; START  :              S1 $01
+        ; 左     : レバー        S1 $02
+        ; 右     : レバー        S1 $04
+        ; SELECT : hold         S1 $08
+        ; PUSH4  : down         S1 $20
+        ; PUSH3  : hard drop    S1 $40
+        ; PUSH2  : 右回り        S2 $20
+        ; PUSH1  : 左回り        S2 $40
+        ;
+        ; $0E:0 1 u8       edgeKey
+
+        $2E=>L,H        ; $0E:1 1 u8       currentKey
+        M=>A1, $2=>L
+        A1=>M, $1=>L    ; $0E:2 1 u8       prevKey
+
+        $1=>STB
+        $0=>STB ; STB:$E
+        $0=>D, $0=>G, $1=>K, $0=>S, $1=>A11
+        $00=>M ; S1を入力
+        $0=>D, $0=>G, $0=>K, $0=>S, $1=>A11
+        $6E=>A1
+        M&A1=>M, $0=>L
+
+        $1=>STB  ; STB:$D
+        $0=>D, $0=>G, $1=>K, $0=>S, $1=>A11
+        $00=>M ; S2を入力
+        $0=>D, $0=>G, $0=>K, $0=>S, $1=>A11
+        $20=>A1
+        IF(M&A1, $1=>L) CAJ M+$01=>M, $1=>L
+        $0=>L
+        $40=>A1
+        IF(M&A1, $1=>L) CAJ M+$10=>M, $1=>L
+        ;
+        ; 入力のedge作成
+        ;
+        $0E=>L,H        ; $0E:0 1 u8       edgeKey
+        $00=>M
+
+        $40=>A1
+        $2E=>L,H        ; $0E:1 1 u8       currentKey
+;-------------------------------------------------------------------------
+        JP PAGE_BREAK580
+        ORG $580
+PAGE_BREAK580: ;----------------------------------------------------------
+JumpEntryUpdateKey_Loop0:
+        IF(M&A1==0,$1=>L) JP JumpEntryUpdateKey_Next0
+        $4E=>L,H        ; $0E:2 1 u8       prevKey
+;        IF(M&A1,$1=>L) JP JumpEntryUpdateKey_Next0
+;        $0E=>L,H        ; $0E:0 1 u8       edgeKey
+        IF(M&A1,$0=>L) JP JumpEntryUpdateKey_Next0
+        M|A1=>M, $1=>L
+JumpEntryUpdateKey_Next0:
+        A1=>RS, $1=>L
+        IF(A1&A1, $1=>L) JP JumpEntryUpdateKey_Loop0
+; リピート
+        ; if((currentKey & prevKey) & 0x06 != 0) {
+        ;        repCounter++;
+        ; } else repCounter = 0;
+        $4E=>L,H        ; $0E:2 1 u8       prevKey
+        M=>A1, $1=>L
+        M=>A2, $0=>L    ; $0E:1 1 u8       currentKey
+        A1&A2=>A1, $0=>L
+        $06=>A2
+        IF(A1&A2,$3=>L) JP UpdateKey_Repeat
+UpdateKey_Reset_Repeat:
+        $00=>M          ; $0E:3 1 u8       keyRepeat
+UpdateKey_Repeat:
+        IF(M>=$70) JP UpdateKey_Skip00
+    CAJ M+$02=>M, $0=>L
+UpdateKey_Skip00:
+;
+; ゲームオーバーの判定と遷移
+;
+        $02=>A1
+        $7E=>L,H    ;  1E:3:$02   bool game_over
+        IF(M&A1, $0=>L) JP GAME_OVER
+
+;        if(dropping.droppingState == EDroppingState::Interval) {
+;            auto f = dropping.Interval;
+;            // constexpr u32 INTERVAL = 20;
+;            if(f > INTERVAL) {
+;                lines_close();
+;                const auto& mino = nextminos.back();
+;                nextminos.pop_back();
+;                game_over = !drop_start(mino);
+;                holdflag  = false;
+;                nextminos.push_front(minogen.generate());
+;                dropping = DroppingState(EDroppingState::Dropping);
+;            } else {
+;                dropping = DroppingState(EDroppingState::Interval, f+1);
+;            }
+;            return;
+;        }
+dropping_block:
+        $08=>A1
+        $7E=>L,H    ;  1E:3   bool dropping.droppingState;    $08
+   EQJ/ M&A1, $0=>L
+        JP  dropping_block_exit
+
+        ;$1E=>L,H    ;  1E:0   u8   dropping.Interval;
+        IF(M>=$15) JP dropping_block_zap0
+        ; dropping = DroppingState(EDroppingState::Interval, f+1);
+        $1E=>L,H    ;  1E:0   u8   dropping.Interval;
+    CAJ M+$01=>M, $0=>L
+        JP MAIN_LOOP
+dropping_block_zap0:
+        JS  lines_close
+        ; const auto& mino = nextminos.back();
+        ; nextminos.pop_back();
+                    ;  1B:2 1 MinoKind nextminos[0].kind;
+                    ;  1B:3 1 MinoKind nextminos[1].kind;
+                    ;  1C 0 1 MinoKind nextminos[2].kind;
+        $5B=>L,H    ; $1B:2 nextminos[0].kind;
+        M=>A1, $3=>L
+
+                    ; nextminos[1].kind => nextminos[0].kind
+        ;$7B=>L,H   ; $1B:3 nextminos[1].kind;
+        M=>A2, $2=>L
+        ;$5B=>L,H   ; $1B:2 nextminos[0].kind;
+        A2=>M, $0=>L
+                    ; nextminos[2].kind => nextminos[1].kind
+        $1C=>L,H    ; $1C:0 nextminos[2].kind
+        M=>A2, $2=>L
+        $7B=>L,H    ; $1B:2 nextminos[1].kind
+        A2=>M, $2=>L
+                    ; A1:mino
+        ; game_over = !drop_start(mino);
+        JS  drop_start
+        JP  dropping_block_set_game_over   ; 駄目だった
+        JP  dropping_block_reset_game_over ; OK
+dropping_block_set_game_over:
+        $02=>A1
+        $7E=>L,H    ;  1E:3   bool game_over;                 $02
+        M|A1=>M, $0=>L
+        JP  dropping_block_zap1
+dropping_block_reset_game_over:
+        $7D=>A1     ; $7D(~2)
+        $7E=>L,H    ;  1E:3   bool game_over;                 $02
+        M&A1=>M, $0=>L
+dropping_block_zap1:
+        ; holdflag  = false;
+        $7B=>A1     ; $7B(~4)
+        $7E=>L,H    ;  1E:3   bool holdflag                   $04
+        M&A1=>M, $0=>L
+        ; nextminos.push_front(minogen.generate());
+        JS  minogen_generate
+        ; dropping = DroppingState(EDroppingState::Dropping);
+        $77=>A1     ; $77(~8)
+        $7E=>L,H    ;  1E:3   bool dropping.droppingState;    $08
+        M&A1=>M, $0=>L
+        JP MAIN_LOOP
+dropping_block_exit:
+
+;        /*
+;        keys[0] : A button  $01
+;        keys[1] : B button  $10
+;        keys[2] : hard drop $40
+;        keys[3] : down      $20
+;        keys[4] : right     $04
+;        keys[5] : left      $02
+;        keys[6] : hold      $08
+;        */
+;        if(keys[0] || keys[1]) { gravity.fix_flag = false; }
+key_gravity_fix_flag_block:
+        $11=>A1     ; A button | B button
+        $0E=>L,H    ; edgeKey
+        ;IF(M&A1 == 0, $0=>L) JP key_gravity_fix_flag_block_exit
+        IF(M&A1 == 0, $0=>L) JP key_spin_block_exit     ; spinもスキップできる
+                            ; gravity.fix_flag = false;
+        $7E=>A2 ; $7E(~1)
+        $7E=>L,H            ; gravity.fix_flag $1E:3:$01
+        M&A2=>M, $0=>L
+key_gravity_fix_flag_block_exit:
+
+;
+;        // spin
+;        if(keys[0]) {
+;            contmino.spin_right(field);
+;        } else if(keys[1]) {
+;            contmino.spin_left(field);
+;        }
+key_spin_block:
+        $01=>A1     ; A button  $01
+        $0E=>L,H    ; edgeKey
+        IF(M&A1 == 0, $0=>L) JP key_spin_block_zap0
+        ;JP  spin_right
+; =========================================
+;    void spin_right(Field& field) {
+;        dir = dir.next();
+;        if(!pos_verify(field)) {
+;            const s8* seq = dir.next_sequences(kind);
+;            for(size_t i = 0; i < 8; i+=2) {
+;                if(move_mino(field, seq[i + 1], seq[i])) {
+;                    return; // 移動できたら終了
+;                }
+;            }
+;            // 移動できなかったので、元の方向に戻す
+;            dir = dir.pre();
+;        }
+;    }
+spin_right:
+        JS  dir_next
+        JS  pos_verify
+        JP  spin_right_pos_verify_false ; 駄目だったら SRE
+        JP  Return_spin_right ; OK
+spin_right_pos_verify_false:
+        ; ワークに一時退避
+        $3A=>L,H
+        M=>A1, $2=>L    ; $1A:1 contmino.pos[0]
+        M=>A2, $0=>L    ; $1A:2 contmino.pos[1]
+        $5F=>L,H
+        A1=>M, $3=>L    ; @WORK2
+        A2=>M, $0=>L    ; @WORK3
+        $0D=>L,H                ; $0D:0     @WORK4
+        $00=>M
+spin_right_Loop00:
+        ; ---------------------------
+
+        ; 少し動かして判定する
+        M=>A1, $0=>L            ; $0D:0     @WORK4
+        $1F=>L,H                ; $1F:0     @WORK0
+        A1=>M, $0=>L
+        JS  next_sequences
+        JS  pos_verify
+        JP  spin_right_Loop00_next  ; 移動できなかったら次の場所
+        JP  Return_spin_right       ; 移動できたら終了
+
+        ; ---------------------------
+spin_right_Loop00_next:
+        $0D=>L,H                ; $0D:0     @WORK4
+    CAJ M+$01=>M, $0=>L
+        IF(M>=$04) JP spin_right_Loop00_break
+        JP  spin_right_Loop00
+spin_right_Loop00_break:
+
+        ; 移動できなかったので、元の方向に戻す
+        JS  dir_pre
+        ; 移動できなかったので、位置を元に戻す
+        $5F=>L,H                ; $1F:2     @WORK2
+        M=>A1, $3=>L            ; @WORK2
+        M=>A2, $1=>L            ; @WORK3
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        A1=>M, $2=>L            ; $1A:1 contmino.pos[0]
+        A2=>M, $0=>L            ; $1A:2 contmino.pos[1]
+        ;JP  Return_spin_right
+Return_spin_right:
+
+        JP  key_spin_block_exit
+key_spin_block_zap0:
+        $10=>A1     ; B button  $10
+        IF(M&A1==0, $0=>L) JP  key_spin_block_exit
+
+; =========================================
+;    void spin_left(Field& field) {
+;        dir = dir.pre();
+;        if(!pos_verify(field)) {
+;            const s8* seq = dir.pre_sequences(kind);
+;            for(size_t i = 0; i < 8; i+=2) {
+;                if(move_mino(field, seq[i + 1], seq[i])) {
+;                    return; // 移動できたら終了
+;                }
+;            }
+;            // 移動できなかったので、元の方向に戻す
+;            dir = dir.next();
+;        }
+;    }
+spin_left:
+        JS  dir_pre
+        JS  pos_verify
+        JP  spin_left_pos_verify_false  ; 駄目だったら SRE
+        JP  Return_spin_left            ; OKなら      SRE+1
+spin_left_pos_verify_false:
+        ; ワークに一時退避
+        $3A=>L,H
+        M=>A1, $2=>L    ; $1A:1 contmino.pos[0]
+        M=>A2, $0=>L    ; $1A:2 contmino.pos[1]
+        $5F=>L,H
+        A1=>M, $3=>L    ; @WORK2
+        A2=>M, $0=>L    ; @WORK3
+
+        $0D=>L,H                ; $0D:0     @WORK4
+        $00=>M
+spin_left_Loop00:
+        ; ---------------------------
+
+        ; 少し動かして判定する
+        M=>A1, $0=>L            ; $0D:0     @WORK4
+        $1F=>L,H                ; $1F:0     @WORK0
+        A1=>M, $0=>L
+;-------------------------------------------------------------------------
+        JP PAGE_BREAK600
+        ORG $600
+PAGE_BREAK600: ;----------------------------------------------------------
+        JS  pre_sequences
+        JS  pos_verify
+        JP  spin_left_Loop00_next   ; 移動できなかったら次の場所
+        JP  Return_spin_left        ; 移動できたら終了
+
+        ; ---------------------------
+spin_left_Loop00_next:
+        $0D=>L,H                ; $0D:0     @WORK4
+    CAJ M+$01=>M, $0=>L
+        IF(M>=$04) JP spin_left_Loop00_break
+        JP  spin_left_Loop00
+spin_left_Loop00_break:
+
+        ; 移動できなかったので、元の方向に戻す
+        JS  dir_next
+        ; 移動できなかったので、位置を元に戻す
+        $5F=>L,H                ; $1F:2     @WORK2
+        M=>A1, $3=>L            ; @WORK2
+        M=>A2, $1=>L            ; @WORK3
+        $3A=>L,H                ; $1A:1 contmino.pos[0]
+        A1=>M, $2=>L            ; $1A:1 contmino.pos[0]
+        A2=>M, $0=>L            ; $1A:2 contmino.pos[1]
+        ;JP  Return_spin_left
+Return_spin_left:
+
+key_spin_block_exit:
+
+;        // hard drop
+;        if(keys[2]) {
+;            while(mino_down_with_score()) {}
+;            fix_mino();
+;        }
+key_hard_drop_block:
+        $40=>A1     ; hard drop
+        $0E=>L,H    ; edgeKey
+        IF(M&A1 == 0, $0=>L) JP key_hard_drop_block_exit
+key_hard_drop_block_loop0:
+        JS  mino_down_with_score
+        JP  key_hard_drop_block_break; 移動できなかった
+        JP  key_hard_drop_block_loop0; 移動できた
+key_hard_drop_block_break:
+        JS  EntryFixMino
+key_hard_drop_block_exit:
+
+;        // move
+;        if(keys[3]) {
+;            mino_down_with_score();
+;        } else if(keys[4]) {
+;            contmino.move_mino(field, 0, 1);
+;        } else if(keys[5]) {
+;            contmino.move_mino(field, 0,-1);
+;        }
+key_move_block:
+        $20=>A1     ; down
+        $2E=>L,H    ; $0E:1 1 u8       currentKey
+        IF(M&A1 == 0, $0=>L) JP key_move_block_zap0
+        JS  mino_down_with_score
+        JP  key_move_block_exit ; 移動できなかった
+        JP  key_move_block_exit ; 移動できた
+key_move_block_zap0:
+        $3F=>L,H
+        $00=>M    ; @WORK1 = 0x00;
+
+        ; キーリピート
+        $6E=>L,H   ; $0E:3 1 u8       keyRepeat
+        IF(M>=$1C) JP key_move_block_repeat
+        $0E=>L,H
+        JP      key_move_block_no_repeat
+key_move_block_repeat:
+        $2E=>L,H ; リピートが有効ならカレントで判定する
+key_move_block_no_repeat:
+
+        $04=>A1     ; right
+        IF(M&A1 == 0, $0=>L) JP key_move_block_zap1
+        $1F=>L,H
+        $01=>M    ; @WORK0 = 0x01;
+;        $3F=>L,H
+;        $00=>M    ; @WORK1 = 0x00;
+        JP key_move_block_1
+;        JS EntryMoveMino
+;        JP  key_move_block_exit ; 移動できなかった
+;        JP  key_move_block_exit ; 移動できた
+key_move_block_zap1:
+        ; キーリピート
+        $6E=>L,H   ; $0E:3 1 u8       keyRepeat
+        IF(M>=$1C) JP key_move_block_repeat2
+        $0E=>L,H
+        JP      key_move_block_no_repeat2
+key_move_block_repeat2:
+        $2E=>L,H ; リピートが有効ならカレントで判定する
+key_move_block_no_repeat2:
+
+        $02=>A1    ; left
+        IF(M&A1 == 0, $0=>L) JP key_move_block_exit
+        $1F=>L,H
+        $7F=>M    ; @WORK0 = -1;
+;        $3F=>L,H
+;        $00=>M    ; @WORK1 = 0x00;
+key_move_block_1:
+        JS EntryMoveMino
+        NOP         ; 移動できなかった
+key_move_block_exit:
+
+;        if(keys[6] && !holdflag) {
+;            if(holdmino != MinoKind::D) {
+;                // ホールドしているミノを使う
+;                game_over = !drop_start(holdmino);
+;                holdmino = MinoKind::D;
+;            } else {
+;                // ホールドする
+;                holdmino = contmino.kind;
+;
+;                nextminos.push_front(minogen.generate());
+;                game_over = !drop_start(nextminos.back());
+;                nextminos.pop_back();
+;            }
+;            holdflag = true;
+;        }
+key_hold_block:
+        $08=>A1     ; hold
+        $0E=>L,H    ; edgeKey
+        IF(M&A1 == 0, $0=>L) JP key_hold_block_exit
+        $04=>A1
+        $7E=>L,H    ; bool holdflag 1E:3:$04
+        IF(M&A1, $0=>L) JP key_hold_block_exit
+
+        $3B=>L,H    ;  1B:1 MinoKind holdmino.kind     // Holdしているミノの種類
+        IF(M>=$01) JP key_hold_block_cond0_true
+        JP key_hold_block_cond0_false
+
+key_hold_block_cond0_true: ; ホールドしているミノを使う
+        $3B=>L,H    ;  1B:1 MinoKind holdmino.kind
+        M=>A1, $1=>L
+        JS  drop_start
+        JP  key_hold_block_set_game_over0           ; 駄目だった
+        JP  key_hold_block_reset_game_over0         ; おけた
+key_hold_block_set_game_over0:
+        $02=>A1
+        $7E=>L,H    ;  1E:3   bool game_over;                 $02
+        M|A1=>M, $0=>L
+        JP  key_hold_block_zap10
+key_hold_block_reset_game_over0:
+        $7D=>A1     ; $7D(~2)
+        $7E=>L,H    ;  1E:3   bool game_over;                 $02
+        M&A1=>M, $0=>L
+key_hold_block_zap10:
+        $3B=>L,H    ;  1B:1 MinoKind holdmino.kind
+        $00=>M
+        JP  key_hold_block_zap2
+
+key_hold_block_cond0_false: ; ホールドする
+        $7A=>L,H    ;  1A:3 MinoKind contmino.kind;
+        M=>A1, $3=>L
+        $3B=>L,H    ;  1B:1 MinoKind holdmino.kind     // Holdしているミノの種類
+        A1=>M, $1=>L
+
+        $5B=>L,H    ; $1B:2 nextminos[0].kind;
+        M=>A1, $3=>L
+                    ; nextminos[1].kind => nextminos[0].kind
+        ;$7B=>L,H   ; $1B:3 nextminos[1].kind;
+        M=>A2, $2=>L
+        ;$5B=>L,H   ; $1B:2 nextminos[0].kind;
+        A2=>M, $0=>L
+                    ; nextminos[2].kind => nextminos[1].kind
+        $1C=>L,H    ; $1C:0 nextminos[2].kind
+        M=>A2, $2=>L
+        $7B=>L,H    ; $1B:2 nextminos[1].kind
+        A2=>M, $2=>L
+                    ; A1:mino
+        ; game_over = !drop_start(mino);
+        JS  drop_start
+        JP  key_hold_block_set_game_over
+        JP  key_hold_block_reset_game_over
+key_hold_block_set_game_over:
+        $02=>A1
+        $7E=>L,H    ;  1E:3   bool game_over;                 $02
+        M|A1=>M, $0=>L
+        JP  key_hold_block_zap1
+key_hold_block_reset_game_over:
+        $7D=>A1     ; $7D(~2)
+        $7E=>L,H    ;  1E:3   bool game_over;                 $02
+        M&A1=>M, $0=>L
+key_hold_block_zap1:
+        ; nextminos.push_front(minogen.generate());
+        JS  minogen_generate
+key_hold_block_zap2:
+        ; holdflag  = true;
+        $04=>A1     ; $7B(~4)
+        $7E=>L,H    ;  1E:3   bool holdflag                   $04
+        M|A1=>M, $0=>L
+key_hold_block_exit:
+
+;        // free fall
+;        if((current_frames % gravity.reciprocal) == 0) {
+;            const bool moved = contmino.move_mino(field, 1, 0);
+;            const bool fix_cond = (current_frames > SAFTY_FRAMES)
+;                && (gravity.fix_flag
+;                    || (current_frames > gravity.drop_limit));
+;
+;            if(fix_cond && !moved) {
+;                fix_mino();
+;            } else if(contmino.move_mino(field, 1, 0)) {
+;                contmino.move_mino(field, -1, 0);
+;            } else {
+;                gravity.fix_flag = true;
+;            }
+;        }
+
+;-------------------------------------------------------------------------
+        JP PAGE_BREAK680
+        ORG $680
+PAGE_BREAK680: ;----------------------------------------------------------
+
+free_fall_block:
+        ; if((current_frames % gravity.reciprocal) == 0) {
+        $2F=>L,H    ; $0F:2 fall_block_counter
+        M=>A1, $0=>L
+        $3E=>L,H     ; gravity.reciprocal $1E:1 u8
+        M=>A2, $0=>L
+        JS  EntryA1ModA2 ; A1%A2 => A1
+        IF(A1&A1, $0=>L) JP free_fall_block_exit
+        $2F=>L,H     ; fall_block_counter     $0F:1 u8
+        $00=>M
+
+        ;   const bool moved = contmino.move_mino(field, 1, 0);
+            $1F=>L,H
+            $00=>M    ; @WORK0 = 0x00;
+            $3F=>L,H
+            $01=>M    ; @WORK1 = 0x01;
+            JS EntryMoveMino
+            JP free_fall_block_evaluate_fix_cond ; 移動できなかった false
+            JP free_fall_block_evaluate_fix_cond_exit ; true movedがtrueならfix_condを評価しなくてもいい
+
+free_fall_block_evaluate_fix_cond:
+        ;   const bool fix_cond = (current_frames > SAFTY_FRAMES)
+        ;       && (gravity.fix_flag || (current_frames > gravity.drop_limit));
+
+            ; (current_frames > SAFTY_FRAMES)の評価
+            $0F=>L,H            ; current_frames_h $0F:0
+            IF(M>=$01) JP free_fall_block_evaluate_fix_cond_true_0
+            $1A=>L,H        ; $1A:0 current_frames
+            IF(M>=$5B) JP free_fall_block_evaluate_fix_cond_true_0
+            JP  free_fall_block_evaluate_fix_cond_is_false ; 偽
+
+free_fall_block_evaluate_fix_cond_true_0:
+            $01=>A2             ; gravity.fix_flagの評価
+            $7E=>L,H
+        EQJ M&A2, $0=>L
+            JP  free_fall_block_evaluate_fix_cond_is_true
+
+            ; (current_frames > gravity.drop_limit)
+;;;;            $5E=>L,H            ; gravity.drop_limit $1E:2
+;;;;            M=>A2, $0=>L
+;;;;            $1=>A1
+;;;;        CAJ A2+A1=>A2, $0=>L
+;;;;            $1A=>L,H            ; current_frames $1A:0
+;;;;        BOJ M-A2, $0=>L
+;;;;            JP  free_fall_block_evaluate_fix_cond_is_true
+;;;;            JP  free_fall_block_evaluate_fix_cond_is_false
+            ; gravity.drop_limitは900固定？みたいなので
+            ; 900/128のおよそ7で
+            $0F=>L,H            ; current_frames_h $0F:0
+            IF(M>=$07) JP free_fall_block_evaluate_fix_cond_is_true
+            JP  free_fall_block_evaluate_fix_cond_is_false
+
+        ; if(fix_cond && !moved) {
+        ;   fix_mino();
+free_fall_block_evaluate_fix_cond_is_true:
+            JS  EntryFixMino
+            JP  free_fall_block_exit
+        ; } else if(contmino.move_mino(field, 1, 0)) {
+free_fall_block_evaluate_fix_cond_is_false:
+free_fall_block_evaluate_fix_cond_exit:
+        $1F=>L,H
+        $00=>M   ; @WORK0 = 0;
+        $3F=>L,H
+        $01=>M   ; @WORK1 = 1;
+        JS EntryMoveMino
+        JP free_fall_block_Cond3 ; 移動できなかった false
+        ;   contmino.move_mino(field, -1, 0);
+            $1F=>L,H
+            $00=>M   ; @WORK0 = 0;
+            $3F=>L,H
+            $7F=>M   ; @WORK1 = -1;
+            JS  EntryMoveMino
+            JP  free_fall_block_exit ; false
+            JP  free_fall_block_exit ; true
+        ; } else {
+free_fall_block_Cond3:
+            ; gravity.fix_flag = true;
+            $7E=>L,H            ; gravity.fix_flag $1E:3:$01
+            $01=>A2
+            M|A2=>M, $0=>L
+        ; }
+free_fall_block_exit:
+
+
+; total_frames += 1;
+; current_frames += 1;
+; goto MAIN_LOOP;
+        $2F=>L,H            ; fall_block_counter $0F:1
+    CAJ M+$01=>M, $0=>L
+        NOP
+        $1A=>L,H            ; current_frames $1A:0
+    CAJ M+$01=>M, $0=>L
+        JP  MAIN_LOOP
+        $0F=>L,H            ; current_frames_h $0F:0
+    CAJ M+$01=>M, $0=>L
+        JP  MAIN_LOOP
+        JP  MAIN_LOOP
+;
+; メインループ終わり
+;
+
+; ================================================================================
+; 
+; ================================================================================
+
+;
+;
+;
+; 1:I 2:O 3:S 4:Z 5:J 6:L 7:T
+GetMinoColor:
+        $02=>A1                 ; 1:I LIGHT BLUE
+        IF(M>=$02) $0C=>A1      ; 2:O YELLOW
+        IF(M>=$03) $04=>A1      ; 3:S GREEN   OK
+        IF(M>=$04) $08=>A1      ; 4:Z RED     OK
+        IF(M>=$05) $02=>A1      ; 5:J DARK BLUE
+        IF(M>=$06) $0E=>A1      ; 6:L ORANGE
+        IF(M>=$07) $0A=>A1      ; 7:T PURPLE
+        JP ReturnGetMinoColor
